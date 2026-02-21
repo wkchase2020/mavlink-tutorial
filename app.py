@@ -1,6 +1,6 @@
 import streamlit as st
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import deque
 
 # ==================== 页面配置 ====================
@@ -9,6 +9,13 @@ st.set_page_config(
     page_icon="🚁",
     layout="wide"
 )
+
+# ==================== 时区转换函数 ====================
+def get_local_time():
+    """获取中国标准时间 (UTC+8)"""
+    utc_time = datetime.utcnow()
+    local_time = utc_time + timedelta(hours=8)
+    return local_time
 
 # ==================== MAVLink 常量 ====================
 MAV_TYPE = {
@@ -563,7 +570,7 @@ if 'recv_count' not in st.session_state:
 
 # ==================== 页面布局 ====================
 st.title("🚁 MAVLink 心跳包实时演示")
-st.caption("模拟 MAVLink 心跳包发送与接收过程")
+st.caption("模拟 MAVLink 心跳包发送与接收过程 | 北京时间 (UTC+8)")
 
 # 侧边栏控制 - 全部使用下拉列表
 with st.sidebar:
@@ -732,11 +739,11 @@ with hex_col2:
 
 # ==================== 通信循环 ====================
 if st.session_state.is_running:
-    # 生成模拟数据 - 使用统一的时间戳
+    # 生成模拟数据 - 使用北京时间 (UTC+8)
     seq = st.session_state.send_count + 1
     
-    # 获取当前系统时间（统一时间戳）
-    current_time = datetime.now()
+    # 获取北京时间（UTC+8）
+    current_time = get_local_time()
     timestamp = current_time.strftime("%H:%M:%S.%f")[:-3]
     
     # 获取当前选择的含义
@@ -746,7 +753,7 @@ if st.session_state.is_running:
     # 构建模拟 HEX 数据
     hex_data = f"FD 09 00 00 {seq % 256:02X} {system_id:02X} {component_id:02X} 00 00 00 {system_id:02X} 00 00 00 00 51 04 03 {mav_type:02X} 0C"
     
-    # 发送日志 - 使用统一时间戳
+    # 发送日志 - 使用北京时间
     send_entry = {
         'time': timestamp,
         'seq': seq,
@@ -762,7 +769,7 @@ if st.session_state.is_running:
     # 模拟网络延迟（但时间戳保持一致）
     time.sleep(0.1)
     
-    # 接收日志 - 使用相同的时间戳（模拟自发自收）
+    # 接收日志 - 使用相同的北京时间
     recv_entry = {
         'time': timestamp,  # 使用与发送相同的时间戳
         'seq': seq,
@@ -782,4 +789,4 @@ if st.session_state.is_running:
     st.rerun()
 
 st.markdown("---")
-st.caption("MAVLink Simulator | 发送端 ➜ 网络 ➜ 接收端")
+st.caption("MAVLink Simulator | 发送端 ➜ 网络 ➜ 接收端 | 北京时间 (UTC+8)")
