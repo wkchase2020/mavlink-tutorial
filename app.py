@@ -649,17 +649,22 @@ with col_send:
         }
         st.json(config_data)
     
-    # 发送日志
+    # 发送日志 - 使用高对比度颜色
     st.markdown("**发送记录:**")
     send_container = st.container()
     with send_container:
         if st.session_state.send_log:
             for log in reversed(list(st.session_state.send_log)[-8:]):
+                # 使用更亮的颜色确保在深色背景上清晰可见
                 st.markdown(f"""
-                <div style="background:#1E1E1E;padding:8px;margin:4px 0;border-radius:4px;font-family:monospace;font-size:12px;">
-                <span style="color:#888;">[{log['time']}]</span> 
-                <span style="color:#4CAF50;">➜ SEND</span> 
-                SEQ:{log['seq']} | SYS:{log['sys']}({log['sys_meaning']}) | COMP:{log['comp']}({log['comp_meaning']})
+                <div style="background:#2D2D2D;padding:10px;margin:5px 0;border-radius:5px;font-family:'Courier New',monospace;font-size:13px;border-left:4px solid #00FF00;">
+                    <span style="color:#AAAAAA;font-weight:bold;">[{log['time']}]</span>
+                    <span style="color:#00FF00;font-weight:bold;margin-left:8px;">➜ SEND</span>
+                    <span style="color:#FFFFFF;margin-left:8px;">SEQ:<b>{log['seq']}</b></span>
+                    <span style="color:#FFD700;margin-left:8px;">SYS:{log['sys']}</span>
+                    <span style="color:#87CEEB;">({log['sys_meaning']})</span>
+                    <span style="color:#FF69B4;margin-left:8px;">COMP:{log['comp']}</span>
+                    <span style="color:#87CEEB;">({log['comp_meaning']})</span>
                 </div>
                 """, unsafe_allow_html=True)
         else:
@@ -686,17 +691,21 @@ with col_recv:
         else:
             st.json({"状态": "等待接收..."})
     
-    # 接收日志
+    # 接收日志 - 使用高对比度颜色
     st.markdown("**接收记录:**")
     recv_container = st.container()
     with recv_container:
         if st.session_state.recv_log:
             for log in reversed(list(st.session_state.recv_log)[-8:]):
+                # 使用更亮的颜色确保在深色背景上清晰可见
                 st.markdown(f"""
-                <div style="background:#1E1E1E;padding:8px;margin:4px 0;border-radius:4px;font-family:monospace;font-size:12px;">
-                <span style="color:#888;">[{log['time']}]</span> 
-                <span style="color:#2196F3;">⬅ RECV</span> 
-                SEQ:{log['seq']} | SYS:{log['sys']} | {log['type_name']}
+                <div style="background:#2D2D2D;padding:10px;margin:5px 0;border-radius:5px;font-family:'Courier New',monospace;font-size:13px;border-left:4px solid #00BFFF;">
+                    <span style="color:#AAAAAA;font-weight:bold;">[{log['time']}]</span>
+                    <span style="color:#00BFFF;font-weight:bold;margin-left:8px;">⬅ RECV</span>
+                    <span style="color:#FFFFFF;margin-left:8px;">SEQ:<b>{log['seq']}</b></span>
+                    <span style="color:#FFD700;margin-left:8px;">SYS:{log['sys']}</span>
+                    <span style="color:#87CEEB;">({log['sys_meaning']})</span>
+                    <span style="color:#FF69B4;margin-left:8px;">{log['type_name']}</span>
                 </div>
                 """, unsafe_allow_html=True)
         else:
