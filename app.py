@@ -126,7 +126,7 @@ COMPONENT_ID_MAP = {
 # ==================== 预定义通信场景 ====================
 COMMUNICATION_SCENARIOS = {
     "drone_to_gcs": {
-        "name": "🚁 无人机 → 地面站",
+        "name": "无人机 → 地面站",
         "description": "无人机飞控发送心跳包给地面控制站，用于状态监控和连接保持",
         "sender_sys": 1,
         "sender_comp": 1,
@@ -138,7 +138,7 @@ COMMUNICATION_SCENARIOS = {
         "icon": "🚁→🖥️"
     },
     "sensor_to_fc": {
-        "name": "📡 传感器 → 飞控",
+        "name": "传感器 → 飞控",
         "description": "机载传感器（GPS、雷达等）向飞控上报数据和状态",
         "sender_sys": 20,
         "sender_comp": 18,
@@ -150,7 +150,7 @@ COMMUNICATION_SCENARIOS = {
         "icon": "📡→🧠"
     },
     "gcs_to_drone": {
-        "name": "🖥️ 地面站 → 无人机",
+        "name": "地面站 → 无人机",
         "description": "地面站发送任务指令或控制命令给无人机",
         "sender_sys": 2,
         "sender_comp": 3,
@@ -162,7 +162,7 @@ COMMUNICATION_SCENARIOS = {
         "icon": "🖥️→🚁"
     },
     "companion_to_fc": {
-        "name": "💻 伴机电脑 → 飞控",
+        "name": "伴机电脑 → 飞控",
         "description": "Companion Computer 向飞控发送高级控制指令或任务数据",
         "sender_sys": 7,
         "sender_comp": 2,
@@ -174,7 +174,7 @@ COMMUNICATION_SCENARIOS = {
         "icon": "💻→🧠"
     },
     "custom": {
-        "name": "⚙️ 自定义配置",
+        "name": "自定义配置",
         "description": "手动配置发送端和接收端身份，灵活模拟各种场景",
         "sender_sys": 1,
         "sender_comp": 1,
@@ -198,62 +198,37 @@ if 'send_count' not in st.session_state:
     st.session_state.send_count = 0
 if 'recv_count' not in st.session_state:
     st.session_state.recv_count = 0
+if 'selected_scenario' not in st.session_state:
+    st.session_state.selected_scenario = "drone_to_gcs"
 
 # ==================== 页面布局 ====================
 st.title("🚁 MAVLink 心跳包实时演示")
 st.caption("模拟 MAVLink 通信协议 | 支持多种典型应用场景 | 北京时间 (UTC+8)")
 
-# ==================== 场景选择 ====================
+# ==================== 场景选择（使用 selectbox 更可靠） ====================
 st.header("📋 选择通信场景")
 
-scenario_cols = st.columns(len(COMMUNICATION_SCENARIOS))
+# 使用 selectbox 替代 radio，更可靠
+scenario_options = list(COMMUNICATION_SCENARIOS.keys())
+scenario_labels = [f"{COMMUNICATION_SCENARIOS[k]['icon']} {COMMUNICATION_SCENARIOS[k]['name']}" for k in scenario_options]
 
-selected_scenario = None
-for idx, (key, scenario) in enumerate(COMMUNICATION_SCENARIOS.items()):
-    with scenario_cols[idx]:
-        # 创建卡片式按钮
-        card_style = """
-        <style>
-        .scenario-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
-            cursor: pointer;
-            transition: transform 0.2s;
-            border: 3px solid transparent;
-        }
-        .scenario-card:hover {
-            transform: scale(1.05);
-            border-color: #00FF00;
-        }
-        .scenario-card.selected {
-            border-color: #00FF00;
-            box-shadow: 0 0 20px rgba(0,255,0,0.5);
-        }
-        </style>
-        """
-        st.markdown(card_style, unsafe_allow_html=True)
-        
-        # 使用 radio 按钮实现单选
-        if st.radio(
-            label="",
-            options=[key],
-            format_func=lambda x: f"{scenario['icon']}\n\n**{scenario['name']}**\n\n<small>{scenario['description'][:30]}...</small>",
-            key=f"scenario_{key}",
-            label_visibility="collapsed"
-        ):
-            selected_scenario = key
+selected_index = scenario_options.index(st.session_state.selected_scenario)
+selected_label = st.selectbox(
+    "选择通信场景",
+    options=scenario_labels,
+    index=selected_index,
+    label_visibility="collapsed"
+)
 
-# 获取选中的场景配置
-if selected_scenario is None:
-    selected_scenario = "drone_to_gcs"  # 默认场景
+# 获取选中的场景 key
+selected_scenario = scenario_options[scenario_labels.index(selected_label)]
+st.session_state.selected_scenario = selected_scenario
 
 scenario = COMMUNICATION_SCENARIOS[selected_scenario]
 
 # 显示选中场景的详细信息
 st.info(f"""
-**当前场景:** {scenario['name']} {scenario['icon']}
+**当前场景:** {scenario['icon']} {scenario['name']}
 
 {scenario['description']}
 
@@ -337,7 +312,6 @@ with col_ctrl1:
 with col_ctrl2:
     # 动态箭头和控制按钮
     arrow_color = "#00FF00" if st.session_state.is_running else "#888888"
-    pulse_anim = "🔥" if st.session_state.is_running else "⚡"
     
     st.markdown(f"""
     <div style="text-align: center; padding-top: 20px;">
@@ -378,10 +352,14 @@ with col_ctrl3:
 # ==================== 统计区域 ====================
 st.markdown("---")
 st.subheader("📊 实时统计")
+
+# 发送间隔滑块
+interval = st.slider("发送间隔", 0.5, 3.0, 1.0, 0.1, label_visibility="collapsed")
+
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("📤 已发送", st.session_state.send_count)
 col2.metric("📥 已接收", st.session_state.recv_count)
-col3.metric("⏱️ 发送间隔", f"{st.slider('间隔(秒)', 0.5, 3.0, 1.0, 0.1, label_visibility='collapsed')}s")
+col3.metric("⏱️ 当前间隔", f"{interval}s")
 col4.metric("🚁 飞行器", MAV_TYPE.get(mav_type, "UNKNOWN"))
 
 # ==================== 发送/接收日志 ====================
@@ -392,7 +370,7 @@ col_send_log, col_recv_log = st.columns(2)
 # 左侧：发送端日志
 with col_send_log:
     st.subheader(f"📤 发送日志")
-    st.markdown(f"<small>来自: {SYSTEM_ID_MAP.get(sender_sys, '未知')} (SYS:{sender_sys}/COMP:{sender_comp})</small>", unsafe_allow_html=True)
+    st.caption(f"来自: {SYSTEM_ID_MAP.get(sender_sys, '未知')} (SYS:{sender_sys}/COMP:{sender_comp})")
     
     send_container = st.container()
     with send_container:
@@ -414,7 +392,7 @@ with col_send_log:
 # 右侧：接收端日志
 with col_recv_log:
     st.subheader(f"📥 接收日志")
-    st.markdown(f"<small>目标: {SYSTEM_ID_MAP.get(receiver_sys, '未知')} (SYS:{receiver_sys}/COMP:{receiver_comp})</small>", unsafe_allow_html=True)
+    st.caption(f"目标: {SYSTEM_ID_MAP.get(receiver_sys, '未知')} (SYS:{receiver_sys}/COMP:{receiver_comp})")
     
     recv_container = st.container()
     with recv_container:
@@ -439,7 +417,7 @@ st.subheader("📦 最新 MAVLink 数据包 (HEX)")
 
 hex_col1, hex_col2 = st.columns(2)
 with hex_col1:
-    st.markdown(f"<small><b>发送端 [{SYSTEM_ID_MAP.get(sender_sys, '未知')}] 发出</b></small>", unsafe_allow_html=True)
+    st.caption(f"发送端 [{SYSTEM_ID_MAP.get(sender_sys, '未知')}] 发出")
     if st.session_state.send_log:
         last_send = list(st.session_state.send_log)[-1]
         st.code(last_send['hex'], language='hex')
@@ -447,7 +425,7 @@ with hex_col1:
         st.code("等待数据...", language='text')
 
 with hex_col2:
-    st.markdown(f"<small><b>接收端 [{SYSTEM_ID_MAP.get(receiver_sys, '未知')}] 收到</b></small>", unsafe_allow_html=True)
+    st.caption(f"接收端 [{SYSTEM_ID_MAP.get(receiver_sys, '未知')}] 收到")
     if st.session_state.recv_log:
         last_recv = list(st.session_state.recv_log)[-1]
         st.code(last_recv['hex'], language='hex')
@@ -494,7 +472,7 @@ if st.session_state.is_running:
     st.session_state.recv_log.append(recv_entry)
     st.session_state.recv_count += 1
     
-    time.sleep(max(0, 1.0 - 0.1))  # 使用固定间隔简化
+    time.sleep(max(0, interval - 0.1))
     st.rerun()
 
 st.markdown("---")
