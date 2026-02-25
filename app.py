@@ -461,7 +461,7 @@ elif page == "🗺️ 航线规划":
         with col_a:
             st.markdown("🟢 **起点 A**")
             if st.session_state.point_a:
-                st.success(f"已设置<br>{st.session_state.point_a[0]:.4f}, {st.session_state.point_a[1]:.4f}", unsafe_allow_html=True)
+                st.success(f"已设置\n{st.session_state.point_a[0]:.4f}, {st.session_state.point_a[1]:.4f}")
                 if st.button("清除 A", key="clear_a"):
                     st.session_state.point_a = None
                     st.rerun()
@@ -484,9 +484,9 @@ elif page == "🗺️ 航线规划":
         with col_b:
             st.markdown("🔴 **终点 B**")
             if st.session_state.point_b:
-                st.success(f"已设置<br>{st.session_state.point_b[0]:.4f}, {st.session_state.point_b[1]:.4f}", unsafe_allow_html=True)
+                st.success(f"已设置\n{st.session_state.point_b[0]:.4f}, {st.session_state.point_b[1]:.4f}")
                 if st.button("清除 B", key="clear_b"):
-n                    st.session_state.point_b = None
+                    st.session_state.point_b = None
                     st.rerun()
             else:
                 st.info("未设置")
@@ -613,7 +613,6 @@ elif page == "🛰️ 任务监控":
             st.markdown("---")
             st.subheader("📊 实时飞行数据")
             
-            # 计算进度
             total_wp = len(st.session_state.waypoints)
             current_idx = st.session_state.current_waypoint_index
             
@@ -622,12 +621,10 @@ elif page == "🛰️ 任务监控":
                 st.progress(min(100, progress))
                 st.write(f"当前航点: {current_idx + 1} / {total_wp}")
             
-            # 模拟飞行
             if st.session_state.drone_position and current_idx < total_wp - 1:
                 current_wp = st.session_state.waypoints[current_idx]
                 next_wp = st.session_state.waypoints[current_idx + 1]
                 
-                # 向下一航点移动
                 step = 0.0005
                 curr_lat, curr_lon = st.session_state.drone_position
                 
@@ -644,14 +641,12 @@ elif page == "🛰️ 任务监控":
                 time.sleep(0.3)
                 st.rerun()
             
-            # 遥测数据
             col_tel1, col_tel2, col_tel3, col_tel4 = st.columns(4)
             col_tel1.metric("地速", f"{random.uniform(8, 12):.1f} m/s")
             col_tel2.metric("空速", f"{random.uniform(10, 15):.1f} m/s")
             col_tel3.metric("相对高度", f"{st.session_state.flight_altitude} m")
             col_tel4.metric("卫星数", random.randint(8, 15))
             
-            # 实时地图
             st.markdown("---")
             st.subheader("🗺️ 实时位置")
             
