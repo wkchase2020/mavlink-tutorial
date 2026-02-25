@@ -7,7 +7,57 @@ from collections import deque
 import folium
 from folium.plugins import Draw, MarkerCluster, AntPath
 from streamlit_folium import st_folium
-import json
+
+# ==================== 坐标系转换函数 ====================
+def wgs84_to_gcj02(lng, lat):
+    """WGS-84转GCJ-02（火星坐标系）"""
+    if out_of_china(lng, lat):
+        return lng, lat
+    dlat = transformlat(lng - 105.0, lat - 35.0)
+    dlng = transformlng(lng - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * math.pi
+    magic = math.sin(radlat)
+    magic = 1 - 0.00669342162296594323 * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((6378245.0 * (1 - 0.00669342162296594323)) / (magic * sqrtmagic) * math.pi)
+    dlng = (dlng * 180.0) / (6378245.0 / sqrtmagic * math.cos(radlat) * math.pi)
+    mglat = lat + dlat
+    mglng = lng + dlng
+    return mglng, mglat
+
+def gcj02_to_wgs84(lng, lat):
+    """GCJ-02（火星坐标系）转WGS-84"""
+    if out_of_china(lng, lat):
+        return lng, lat
+    dlat = transformlat(lng - 105.0, lat - 35.0)
+    dlng = transformlng(lng - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * math.pi
+    magic = math.sin(radlat)
+    magic = 1 - 0.00669342162296594323 * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((6378245.0 * (1 - 0.00669342162296594323)) / (magic * sqrtmagic) * math.pi)
+    dlng = (dlng * 180.0) / (6378245.0 / sqrtmagic * math.cos(radlat) * math.pi)
+    mglat = lat + dlat
+    mglng = lng + dlng
+    return lng * 2 - mglng, lat * 2 - mglat
+
+def transformlat(lng, lat):
+    ret = -100.0 + 2.0 * lng + 3.0 * lat + 0.2 * lat * lat + 0.1 * lng * lat + 0.2 * math.sqrt(abs(lng))
+    ret += (20.0 * math.sin(6.0 * lng * math.pi) + 20.0 * math.sin(2.0 * lng * math.pi)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(lat * math.pi) + 40.0 * math.sin(lat / 3.0 * math.pi)) * 2.0 / 3.0
+    ret += (160.0 * math.sin(lat / 12.0 * math.pi) + 320 * math.sin(lat * math.pi / 30.0)) * 2.0 / 3.0
+    return ret
+
+def transformlng(lng, lat):
+    ret = 300.0 + lng + 2.0 * lat + 0.1 * lng * lng + 0.1 * lng * lat + 0.1 * math.sqrt(abs(lng))
+    ret += (20.0 * math.sin(6.0 * lng * math.pi) + 20.0 * math.sin(2.0 * lng * math.pi)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(lng * math.pi) + 40.0 * math.sin(lng / 3.0 * math.pi)) * 2.0 / 3.0
+    ret += (150.0 * math.sin(lng / 12.0 * math.pi) + 300.0 * math.sin(lng / 30.0 * math.pi)) * 2.0 / 3.0
+    return ret
+
+def out_of_china(lng, lat):
+    """判断是否在中国范围外"""
+    return not (lng > 73.66 and lng < 135.05 and lat > 3.86 and lat < 53.55)
 
 # ==================== 页面配置 ====================
 st.set_page_config(
@@ -195,13 +245,15 @@ def init_session_state():
         'path_planner': PathPlanner(),
         'last_map_click': None,
         'point_a': None, 'point_b': None,
+        'point_a_gcj': None, 'point_b_gcj': None,  # 存储原始GCJ坐标
         'avoidance_enabled': True,
         'flight_altitude': 80,
         'obstacle_radius': 50, 'obstacle_height': 120,
         'current_waypoint_index': 0,
         'flight_path_history': [],  # 飞行轨迹历史
         'animation_step': 0,
-        'show_animation': False
+        'show_animation': False,
+        'coord_system': 'WGS-84'  # 默认坐标系
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -211,12 +263,30 @@ init_session_state()
 
 # ==================== 页面布局 ====================
 st.title("🚁 MAVLink 地面站 - 3D避障航线规划系统")
-st.caption("实时避障路径规划 | 动态飞行仿真 | 障碍物检测与绕行 | 北京时间 (UTC+8)")
+st.caption("实时避障路径规划 | 动态飞行仿真 | 坐标系自动转换 | 北京时间 (UTC+8)")
 
 # ==================== 侧边栏导航 ====================
 with st.sidebar:
     st.header("📋 功能导航")
     page = st.radio("选择功能模块", ["🗺️ 航线规划与避障", "🛰️ 飞行仿真监控", "💓 MAVLink通信"])
+    
+    st.markdown("---")
+    st.header("⚙️ 坐标系设置")
+    
+    # 坐标系选择
+    coord_options = ["WGS-84 (GPS/国际标准)", "GCJ-02 (火星坐标/高德百度)"]
+    selected_coord = st.radio("输入坐标系", coord_options, index=0 if st.session_state.coord_system == 'WGS-84' else 1)
+    st.session_state.coord_system = 'WGS-84' if 'WGS' in selected_coord else 'GCJ-02'
+    
+    st.info(f"""
+    **当前设置:** {st.session_state.coord_system}
+    
+    **说明:**
+    - **WGS-84**: GPS原始坐标、国际标准
+    - **GCJ-02**: 中国国测局坐标，用于高德/百度地图
+    
+    程序会自动转换到WGS-84在地图上显示
+    """)
     
     st.markdown("---")
     st.header("📡 系统状态")
@@ -271,9 +341,22 @@ if page == "🗺️ 航线规划与避障":
         
         # 显示起点A（绿色）
         if st.session_state.point_a:
+            popup_a = f"""
+            <b>🟢 起点 A</b><br>
+            <b>显示坐标(WGS-84):</b><br>
+            纬度: {st.session_state.point_a[0]:.6f}<br>
+            经度: {st.session_state.point_a[1]:.6f}<br>
+            """
+            if st.session_state.point_a_gcj:
+                popup_a += f"""
+                <b>原始输入({st.session_state.coord_system}):</b><br>
+                纬度: {st.session_state.point_a_gcj[0]:.6f}<br>
+                经度: {st.session_state.point_a_gcj[1]:.6f}<br>
+                """
+            
             folium.Marker(
                 st.session_state.point_a,
-                popup=f"<b>起点 A</b><br>纬度: {st.session_state.point_a[0]:.6f}<br>经度: {st.session_state.point_a[1]:.6f}",
+                popup=folium.Popup(popup_a, max_width=300),
                 icon=folium.Icon(color='green', icon='play', prefix='glyphicon'),
                 tooltip="起点 A"
             ).add_to(m)
@@ -283,9 +366,22 @@ if page == "🗺️ 航线规划与避障":
         
         # 显示终点B（红色）
         if st.session_state.point_b:
+            popup_b = f"""
+            <b>🔴 终点 B</b><br>
+            <b>显示坐标(WGS-84):</b><br>
+            纬度: {st.session_state.point_b[0]:.6f}<br>
+            经度: {st.session_state.point_b[1]:.6f}<br>
+            """
+            if st.session_state.point_b_gcj:
+                popup_b += f"""
+                <b>原始输入({st.session_state.coord_system}):</b><br>
+                纬度: {st.session_state.point_b_gcj[0]:.6f}<br>
+                经度: {st.session_state.point_b_gcj[1]:.6f}<br>
+                """
+            
             folium.Marker(
                 st.session_state.point_b,
-                popup=f"<b>终点 B</b><br>纬度: {st.session_state.point_b[0]:.6f}<br>经度: {st.session_state.point_b[1]:.6f}",
+                popup=folium.Popup(popup_b, max_width=300),
                 icon=folium.Icon(color='red', icon='stop', prefix='glyphicon'),
                 tooltip="终点 B"
             ).add_to(m)
@@ -389,16 +485,18 @@ if page == "🗺️ 航线规划与避障":
         # 添加图例
         legend_html = '''
         <div style="position: fixed; 
-                    bottom: 50px; left: 50px; width: 180px;
+                    bottom: 50px; left: 50px; width: 200px;
                     border:2px solid grey; z-index:9999; font-size:12px;
                     background-color:white; padding: 10px; border-radius: 5px;">
         <b>图例</b><br>
-        <i class="glyphicon glyphicon-play" style="color:green"></i> 起点 A<br>
-        <i class="glyphicon glyphicon-stop" style="color:red"></i> 终点 B<br>
+        <i class="glyphicon glyphicon-play" style="color:green"></i> 起点 A (WGS-84)<br>
+        <i class="glyphicon glyphicon-stop" style="color:red"></i> 终点 B (WGS-84)<br>
         <span style="color:red">●</span> 障碍物<br>
         <span style="color:blue">---</span> 规划航线<br>
         <span style="color:orange">—</span> 实际轨迹<br>
-        <span style="color:orange">✈</span> 无人机
+        <span style="color:orange">✈</span> 无人机<br>
+        <hr style="margin:5px 0;">
+        <small>地图使用WGS-84坐标系<br>输入坐标自动转换</small>
         </div>
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
@@ -411,47 +509,68 @@ if page == "🗺️ 航线规划与避障":
             click_lat = map_data['last_clicked']['lat']
             click_lng = map_data['last_clicked']['lng']
             st.session_state.last_map_click = (click_lat, click_lng)
-            st.info(f"📍 点击坐标: 纬度 {click_lat:.6f}, 经度 {click_lng:.6f}")
+            st.info(f"📍 点击坐标(WGS-84): 纬度 {click_lat:.6f}, 经度 {click_lng:.6f}")
     
     with col_right:
         st.subheader("⚙️ 航线设置")
+        
+        # 坐标系提示
+        st.info(f"当前输入坐标系: **{st.session_state.coord_system}**\n\n程序将自动转换为WGS-84在地图上显示")
         
         # 起点A设置
         st.markdown("**🟢 起点 A 设置**")
         col_a1, col_a2 = st.columns(2)
         with col_a1:
-            lat_a = st.number_input("纬度 A", value=st.session_state.point_a[0] if st.session_state.point_a else 32.0603, format="%.6f", key="lat_a")
+            lat_a = st.number_input("纬度 A", value=st.session_state.point_a_gcj[0] if st.session_state.point_a_gcj else 32.0603, format="%.6f", key="lat_a")
         with col_a2:
-            lon_a = st.number_input("经度 A", value=st.session_state.point_a[1] if st.session_state.point_a else 118.7969, format="%.6f", key="lon_a")
+            lon_a = st.number_input("经度 A", value=st.session_state.point_a_gcj[1] if st.session_state.point_a_gcj else 118.7969, format="%.6f", key="lon_a")
         
         col_a_btn1, col_a_btn2 = st.columns(2)
         with col_a_btn1:
             if st.button("✅ 设置 A 点", use_container_width=True):
-                st.session_state.point_a = (lat_a, lon_a)
-                st.success(f"A点已设置: {lat_a:.4f}, {lon_a:.4f}")
+                # 保存原始输入
+                st.session_state.point_a_gcj = (lat_a, lon_a)
+                # 根据坐标系转换
+                if st.session_state.coord_system == 'GCJ-02':
+                    lon_wgs, lat_wgs = gcj02_to_wgs84(lon_a, lat_a)
+                    st.session_state.point_a = (lat_wgs, lon_wgs)
+                    st.success(f"A点已转换!\n输入(GCJ-02): {lat_a:.4f}, {lon_a:.4f}\n显示(WGS-84): {lat_wgs:.4f}, {lon_wgs:.4f}")
+                else:
+                    st.session_state.point_a = (lat_a, lon_a)
+                    st.success(f"A点已设置(WGS-84): {lat_a:.4f}, {lon_a:.4f}")
                 st.rerun()
         with col_a_btn2:
             if st.button("🗑️ 清除 A", use_container_width=True):
                 st.session_state.point_a = None
+                st.session_state.point_a_gcj = None
                 st.rerun()
         
         # 终点B设置
         st.markdown("**🔴 终点 B 设置**")
         col_b1, col_b2 = st.columns(2)
         with col_b1:
-            lat_b = st.number_input("纬度 B", value=st.session_state.point_b[0] if st.session_state.point_b else 32.0703, format="%.6f", key="lat_b")
+            lat_b = st.number_input("纬度 B", value=st.session_state.point_b_gcj[0] if st.session_state.point_b_gcj else 32.0703, format="%.6f", key="lat_b")
         with col_b2:
-            lon_b = st.number_input("经度 B", value=st.session_state.point_b[1] if st.session_state.point_b else 118.8069, format="%.6f", key="lon_b")
+            lon_b = st.number_input("经度 B", value=st.session_state.point_b_gcj[1] if st.session_state.point_b_gcj else 118.8069, format="%.6f", key="lon_b")
         
         col_b_btn1, col_b_btn2 = st.columns(2)
         with col_b_btn1:
             if st.button("✅ 设置 B 点", use_container_width=True):
-                st.session_state.point_b = (lat_b, lon_b)
-                st.success(f"B点已设置: {lat_b:.4f}, {lon_b:.4f}")
+                # 保存原始输入
+                st.session_state.point_b_gcj = (lat_b, lon_b)
+                # 根据坐标系转换
+                if st.session_state.coord_system == 'GCJ-02':
+                    lon_wgs, lat_wgs = gcj02_to_wgs84(lon_b, lat_b)
+                    st.session_state.point_b = (lat_wgs, lon_wgs)
+                    st.success(f"B点已转换!\n输入(GCJ-02): {lat_b:.4f}, {lon_b:.4f}\n显示(WGS-84): {lat_wgs:.4f}, {lon_wgs:.4f}")
+                else:
+                    st.session_state.point_b = (lat_b, lon_b)
+                    st.success(f"B点已设置(WGS-84): {lat_b:.4f}, {lon_b:.4f}")
                 st.rerun()
         with col_b_btn2:
             if st.button("🗑️ 清除 B", use_container_width=True):
                 st.session_state.point_b = None
+                st.session_state.point_b_gcj = None
                 st.rerun()
         
         st.markdown("---")
@@ -483,9 +602,9 @@ if page == "🗺️ 航线规划与避障":
         
         col_obs1, col_obs2 = st.columns(2)
         with col_obs1:
-            obs_lat = st.number_input("障碍物纬度", value=st.session_state.map_center[0], format="%.6f")
+            obs_lat_input = st.number_input("障碍物纬度", value=st.session_state.map_center[0], format="%.6f")
         with col_obs2:
-            obs_lon = st.number_input("障碍物经度", value=st.session_state.map_center[1], format="%.6f")
+            obs_lon_input = st.number_input("障碍物经度", value=st.session_state.map_center[1], format="%.6f")
         
         col_obs3, col_obs4 = st.columns(2)
         with col_obs3:
@@ -497,7 +616,13 @@ if page == "🗺️ 航线规划与避障":
         with col_obs_btn1:
             if st.button("➕ 添加障碍物", use_container_width=True):
                 if st.session_state.point_a and st.session_state.point_b:
-                    # 检查障碍物是否在航线上
+                    # 障碍物也需要坐标转换
+                    if st.session_state.coord_system == 'GCJ-02':
+                        lon_wgs, lat_wgs = gcj02_to_wgs84(obs_lon_input, obs_lat_input)
+                        obs_lat, obs_lon = lat_wgs, lon_wgs
+                    else:
+                        obs_lat, obs_lon = obs_lat_input, obs_lon_input
+                    
                     obs = Obstacle(obs_lat, obs_lon, st.session_state.obstacle_radius, 
                                   st.session_state.obstacle_height, f"障碍物{len(st.session_state.obstacles)+1}")
                     st.session_state.obstacles.append(obs)
@@ -505,7 +630,7 @@ if page == "🗺️ 航线规划与避障":
                                                                st.session_state.obstacle_radius, 
                                                                st.session_state.obstacle_height, 
                                                                obs.name)
-                    st.success(f"障碍物已添加！位置: ({obs_lat:.4f}, {obs_lon:.4f})")
+                    st.success(f"障碍物已添加！")
                     st.rerun()
                 else:
                     st.error("请先设置A点和B点")
@@ -539,7 +664,8 @@ if page == "🗺️ 航线规划与避障":
                         
                         # 统计避障信息
                         avoidance_count = len(path) - 2
-                        st.success(f"✅ 避障路径规划完成！\n- 总航点数: {len(path)}\n- 绕行次数: {avoidance_count}\n- 预计飞行距离: {sum([st.session_state.path_planner.haversine_distance(path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon) for i in range(len(path)-1)]):.0f}m")
+                        total_dist = sum([st.session_state.path_planner.haversine_distance(path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon) for i in range(len(path)-1)])
+                        st.success(f"✅ 避障路径规划完成！\n- 总航点数: {len(path)}\n- 绕行次数: {avoidance_count}\n- 预计飞行距离: {total_dist:.0f}m")
                 else:
                     st.session_state.planned_path = [start_wp, end_wp]
                     dist = st.session_state.path_planner.haversine_distance(
@@ -784,7 +910,7 @@ elif page == "💓 MAVLink通信":
                     <span style="color:#FF6B6B;">{log.get('type_name', 'UNKNOWN')}</span> | 
                     <span style="color:#FFE66D;">{log.get('status_name', 'UNKNOWN')}</span>
                 </div>
-                """, unsafe_allow_html=True)
+                """, unsafe_add_html=True)
         else:
             st.info("暂无接收记录")
     
@@ -837,4 +963,4 @@ elif page == "💓 MAVLink通信":
         st.rerun()
 
 st.markdown("---")
-st.caption(f"MAVLink Ground Control Station | 3D避障航线规划系统 v2.0 | 北京时间 (UTC+8)")
+st.caption(f"MAVLink Ground Control Station | 3D避障航线规划系统 v2.1 | 支持坐标系转换 | 北京时间 (UTC+8)")
