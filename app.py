@@ -144,12 +144,17 @@ class PathPlanner:
     def __init__(self):
         self.obstacles = []
         self.safety_margin = 15
+        self.max_flight_altitude = 100  # 最大飞行高度限制
     
     def add_obstacle(self, lat, lon, radius, height, name="障碍物"):
         self.obstacles.append(Obstacle(lat, lon, radius, height, name))
     
     def clear_obstacles(self):
         self.obstacles = []
+    
+    def set_max_altitude(self, max_alt):
+        """设置最大飞行高度"""
+        self.max_flight_altitude = max_alt
     
     def haversine_distance(self, lat1, lon1, lat2, lon2):
         """计算两点间距离（米）"""
@@ -165,12 +170,25 @@ class PathPlanner:
         """检查点是否与障碍物碰撞"""
         for obs in self.obstacles:
             dist = self.haversine_distance(lat, lon, obs.lat, obs.lon)
+            # 水平距离在安全边距内 且 飞行高度低于障碍物高度 = 碰撞
             if dist < (obs.radius + self.safety_margin) and alt < obs.height:
                 return True, obs
         return False, None
     
+    def can_fly_over(self, obs, current_alt):
+        """判断是否可以飞越该障碍物（爬升策略）"""
+        # 飞越需要的高度 = 障碍物高度 + 安全余量
+        required_alt = obs.height + 20  # 20米安全余量
+        # 只有在飞越高度不超过最大飞行高度时才允许
+        return required_alt <= self.max_flight_altitude
+    
     def plan_path(self, start_wp, end_wp, step_size=30):
-        """使用改进的 A* 算法规划避障路径"""
+        """
+        智能避障路径规划算法
+        规则：
+        1. 如果障碍物高度 < 飞行高度：可以从上方飞越（爬升）
+        2. 如果障碍物高度 >= 飞行高度：必须绕行（水平避让）
+        """
         path = [start_wp]
         current = start_wp
         max_iterations = 100
@@ -193,44 +211,112 @@ class PathPlanner:
             collision, obs = self.check_collision(next_lat, next_lon, next_alt)
             
             if not collision:
+                # 无碰撞，直接前进
                 next_wp = Waypoint(next_lat, next_lon, next_alt)
                 path.append(next_wp)
                 current = next_wp
             else:
-                # 绕行策略 - 尝试多个方向
-                found = False
-                angles = [30, -30, 60, -60, 90, -90, 120, -120, 150, -150]
-                
-                for angle in angles:
-                    rad = math.radians(angle)
-                    new_dlat = dlat * math.cos(rad) - dlon * math.sin(rad)
-                    new_dlon = dlat * math.sin(rad) + dlon * math.cos(rad)
-                    test_lat = current.lat + new_dlat * ratio * 1.2
-                    test_lon = current.lon + new_dlon * ratio * 1.2
-                    test_alt = current.alt + 30  # 爬升避障
-                    
-                    if not self.check_collision(test_lat, test_lon, test_alt)[0]:
-                        next_wp = Waypoint(test_lat, test_lon, test_alt)
-                        path.append(next_wp)
-                        current = next_wp
-                        found = True
-                        break
-                
-                if not found:
-                    # 如果无法绕行，尝试直接飞越（如果高度足够）
-                    if current.alt + 50 > max([o.height for o in self.obstacles]):
-                        flyover_wp = Waypoint(next_lat, next_lon, max([o.height for o in self.obstacles]) + 50)
-                        path.append(flyover_wp)
-                        current = flyover_wp
+                # 有碰撞，需要避障
+                # 关键判断：障碍物是否高于最大飞行高度？
+                if obs.height >= self.max_flight_altitude:
+                    # 障碍物太高，无法飞越，必须绕行（水平方向）
+                    found = self.try_detour(current, end_wp, dlat, dlon, ratio, path, obs)
+                    if not found:
+                        # 绕行失败，尝试反向绕行
+                        found = self.try_detour_reverse(current, end_wp, dlat, dlon, ratio, path, obs)
+                    if not found:
+                        st.error(f"无法规划路径：障碍物 '{obs.name}' 过高且无法绕行")
+                        return path
+                else:
+                    # 障碍物可以飞越，尝试爬升策略
+                    if self.can_fly_over(obs, current.alt):
+                        # 尝试爬升飞越
+                        flyover_alt = obs.height + 20
+                        if not self.check_collision(next_lat, next_lon, flyover_alt)[0]:
+                            # 爬升后可以安全通过
+                            flyover_wp = Waypoint(next_lat, next_lon, flyover_alt)
+                            path.append(flyover_wp)
+                            current = flyover_wp
+                        else:
+                            # 爬升后仍有碰撞，需要绕行
+                            found = self.try_detour(current, end_wp, dlat, dlon, ratio, path, obs)
+                            if not found:
+                                found = self.try_detour_reverse(current, end_wp, dlat, dlon, ratio, path, obs)
                     else:
-                        path.append(end_wp)
-                        break
+                        # 无法飞越，必须绕行
+                        found = self.try_detour(current, end_wp, dlat, dlon, ratio, path, obs)
+                        if not found:
+                            found = self.try_detour_reverse(current, end_wp, dlat, dlon, ratio, path, obs)
         
         # 重新编号
         for i, wp in enumerate(path):
             wp.seq = i
         
         return path
+    
+    def try_detour(self, current, end_wp, dlat, dlon, ratio, path, blocking_obs):
+        """尝试向右绕行（顺时针方向）"""
+        angles = [30, 60, 90, 120, 150, -30, -60, -90, -120, -150]
+        
+        for angle in angles:
+            rad = math.radians(angle)
+            new_dlat = dlat * math.cos(rad) - dlon * math.sin(rad)
+            new_dlon = dlat * math.sin(rad) + dlon * math.cos(rad)
+            
+            # 绕行距离要足够远，确保避开障碍物
+            detour_ratio = ratio * 1.5  # 增加绕行距离
+            
+            test_lat = current.lat + new_dlat * detour_ratio
+            test_lon = current.lon + new_dlon * detour_ratio
+            test_alt = current.alt  # 保持当前高度绕行
+            
+            # 检查绕行点是否安全
+            if not self.check_collision(test_lat, test_lon, test_alt)[0]:
+                # 还要检查从绕行点到终点的路径是否安全
+                if self.check_path_clear(test_lat, test_lon, end_wp.lat, end_wp.lon, test_alt):
+                    next_wp = Waypoint(test_lat, test_lon, test_alt)
+                    path.append(next_wp)
+                    return True
+        
+        return False
+    
+    def try_detour_reverse(self, current, end_wp, dlat, dlon, ratio, path, blocking_obs):
+        """尝试反向绕行（逆时针方向，更大的角度）"""
+        angles = [-30, -60, -90, -120, -150, 30, 60, 90, 120, 150]
+        
+        for angle in angles:
+            rad = math.radians(angle)
+            new_dlat = dlat * math.cos(rad) - dlon * math.sin(rad)
+            new_dlon = dlat * math.sin(rad) + dlon * math.cos(rad)
+            
+            detour_ratio = ratio * 2.0  # 更大的绕行距离
+            
+            test_lat = current.lat + new_dlat * detour_ratio
+            test_lon = current.lon + new_dlon * detour_ratio
+            test_alt = current.alt
+            
+            if not self.check_collision(test_lat, test_lon, test_alt)[0]:
+                if self.check_path_clear(test_lat, test_lon, end_wp.lat, end_wp.lon, test_alt):
+                    next_wp = Waypoint(test_lat, test_lon, test_alt)
+                    path.append(next_wp)
+                    return True
+        
+        return False
+    
+    def check_path_clear(self, lat1, lon1, lat2, lon2, alt):
+        """检查两点间直线路径是否安全"""
+        dist = self.haversine_distance(lat1, lon1, lat2, lon2)
+        steps = max(1, int(dist / 10))  # 每10米检查一个点
+        
+        for i in range(steps + 1):
+            ratio = i / steps
+            check_lat = lat1 + (lat2 - lat1) * ratio
+            check_lon = lon1 + (lon2 - lon1) * ratio
+            
+            if self.check_collision(check_lat, check_lon, alt)[0]:
+                return False
+        
+        return True
 
 # ==================== 会话状态初始化 ====================
 def init_session_state():
@@ -247,8 +333,8 @@ def init_session_state():
         'point_a': None, 'point_b': None,
         'point_a_gcj': None, 'point_b_gcj': None,  # 存储原始GCJ坐标
         'avoidance_enabled': True,
-        'flight_altitude': 80,
-        'obstacle_radius': 50, 'obstacle_height': 120,
+        'flight_altitude': 50,  # 默认50米
+        'obstacle_radius': 30, 'obstacle_height': 40,
         'current_waypoint_index': 0,
         'flight_path_history': [],  # 飞行轨迹历史
         'animation_step': 0,
@@ -263,7 +349,7 @@ init_session_state()
 
 # ==================== 页面布局 ====================
 st.title("🚁 MAVLink 地面站 - 3D避障航线规划系统")
-st.caption("实时避障路径规划 | 动态飞行仿真 | 坐标系自动转换 | 北京时间 (UTC+8)")
+st.caption("实时避障路径规划 | 智能绕行算法 | 坐标系自动转换 | 北京时间 (UTC+8)")
 
 # ==================== 侧边栏导航 ====================
 with st.sidebar:
@@ -314,6 +400,26 @@ with st.sidebar:
 # ==================== 航线规划与避障页面 ====================
 if page == "🗺️ 航线规划与避障":
     st.header("🗺️ 航线规划与避障系统")
+    
+    # 避障策略说明
+    with st.expander("📖 避障策略说明", expanded=True):
+        st.markdown("""
+        **🤖 智能避障规则：**
+        
+        1. **🛫 飞越策略**（优先尝试）
+           - 当障碍物高度 **< 飞行高度** 时
+           - 无人机爬升至障碍物上方安全高度通过
+           - 安全余量：障碍物高度 + 20米
+        
+        2. **🔄 绕行策略**（当无法飞越时）
+           - 当障碍物高度 **≥ 飞行高度** 时
+           - 无人机保持当前高度，水平方向绕行
+           - 绕行距离：障碍物半径 + 安全边距 × 1.5
+        
+        3. **⚠️ 无法规划**
+           - 当障碍物过高且无法绕行时
+           - 系统会提示错误，需要调整航线或移除障碍物
+        """)
     
     col_left, col_right = st.columns([3, 2])
     
@@ -391,17 +497,20 @@ if page == "🗺️ 航线规划与避障":
         
         # 显示障碍物（红色圆柱效果）
         for i, obs in enumerate(st.session_state.obstacles):
+            # 判断障碍物类型（可飞越 vs 必须绕行）
+            can_fly_over = obs.height < st.session_state.flight_altitude
+            
             # 外圈 - 危险区域
             folium.Circle(
                 [obs.lat, obs.lon],
-                radius=obs.radius + 15,
-                popup=f"<b>{obs.name} #{i+1}</b><br>半径: {obs.radius}m<br>高度: {obs.height}m<br>危险半径: {obs.radius+15}m",
+                radius=obs.radius + st.session_state.path_planner.safety_margin,
+                popup=f"<b>{obs.name} #{i+1}</b><br>半径: {obs.radius}m<br>高度: {obs.height}m<br>危险半径: {obs.radius + st.session_state.path_planner.safety_margin}m<br>{'<span style=\"color:orange\">⚠️ 必须绕行（过高）</span>' if not can_fly_over else '<span style=\"color:green\">✓ 可以飞越</span>'}",
                 color='darkred',
                 fill=True,
                 fillColor='red',
                 fillOpacity=0.2,
                 weight=2,
-                tooltip=f"障碍物 #{i+1} - 危险区"
+                tooltip=f"障碍物 #{i+1} - {'必须绕行' if not can_fly_over else '可以飞越'}"
             ).add_to(m)
             
             # 内圈 - 实际障碍物
@@ -418,12 +527,13 @@ if page == "🗺️ 航线规划与避障":
             ).add_to(m)
             
             # 中心标记
+            color_code = "orange" if not can_fly_over else "red"
             folium.Marker(
                 [obs.lat, obs.lon],
                 icon=folium.DivIcon(
-                    html=f'<div style="background-color:red;color:white;border-radius:50%;width:24px;height:24px;text-align:center;line-height:24px;font-weight:bold;">{i+1}</div>'
+                    html=f'<div style="background-color:{color_code};color:white;border-radius:50%;width:24px;height:24px;text-align:center;line-height:24px;font-weight:bold;">{i+1}</div>'
                 ),
-                tooltip=f"障碍物 #{i+1} 中心"
+                tooltip=f"障碍物 #{i+1} {'(需绕行)' if not can_fly_over else '(可飞越)'}"
             ).add_to(m)
         
         # 显示规划路径（蓝色虚线）
@@ -443,6 +553,10 @@ if page == "🗺️ 航线规划与避障":
             
             # 显示所有航点
             for i, wp in enumerate(st.session_state.planned_path[1:-1], 1):
+                # 判断是绕行点还是爬升点
+                prev_wp = st.session_state.planned_path[i]
+                is_detour = abs(wp.lat - prev_wp.lat) > 0.0001 or abs(wp.lon - prev_wp.lon) > 0.0001
+                
                 folium.CircleMarker(
                     [wp.lat, wp.lon],
                     radius=6,
@@ -451,7 +565,7 @@ if page == "🗺️ 航线规划与避障":
                     fillColor='white',
                     fillOpacity=0.9,
                     weight=2,
-                    popup=f"航点 {i}<br>高度: {wp.alt}m"
+                    popup=f"航点 {i}<br>高度: {wp.alt}m<br>{'🔄 绕行点' if is_detour else '⬆️ 爬升点'}"
                 ).add_to(m)
         
         # 显示飞行轨迹（橙色实线）
@@ -485,13 +599,14 @@ if page == "🗺️ 航线规划与避障":
         # 添加图例
         legend_html = '''
         <div style="position: fixed; 
-                    bottom: 50px; left: 50px; width: 200px;
+                    bottom: 50px; left: 50px; width: 220px;
                     border:2px solid grey; z-index:9999; font-size:12px;
                     background-color:white; padding: 10px; border-radius: 5px;">
         <b>图例</b><br>
         <i class="glyphicon glyphicon-play" style="color:green"></i> 起点 A (WGS-84)<br>
         <i class="glyphicon glyphicon-stop" style="color:red"></i> 终点 B (WGS-84)<br>
-        <span style="color:red">●</span> 障碍物<br>
+        <span style="color:red">●</span> 障碍物(可飞越)<br>
+        <span style="color:orange">●</span> 障碍物(需绕行)<br>
         <span style="color:blue">---</span> 规划航线<br>
         <span style="color:orange">—</span> 实际轨迹<br>
         <span style="color:orange">✈</span> 无人机<br>
@@ -576,11 +691,19 @@ if page == "🗺️ 航线规划与避障":
         st.markdown("---")
         st.markdown("**✈️ 飞行参数**")
         
+        # 修改飞行高度范围为10-100米
         col_alt, col_margin = st.columns(2)
         with col_alt:
-            st.session_state.flight_altitude = st.slider("飞行高度 (m)", 30, 200, 80)
+            new_altitude = st.slider("飞行高度 (m)", 10, 100, st.session_state.flight_altitude)
+            if new_altitude != st.session_state.flight_altitude:
+                st.session_state.flight_altitude = new_altitude
+                st.session_state.path_planner.set_max_altitude(new_altitude)
+                st.rerun()
         with col_margin:
             st.session_state.path_planner.safety_margin = st.slider("安全边距 (m)", 5, 30, 15)
+        
+        # 显示当前最大飞行高度
+        st.info(f"🚁 当前最大飞行高度: **{st.session_state.flight_altitude}m**\n\n⚠️ 高于此高度的障碍物将触发**绕行策略**")
         
         st.session_state.avoidance_enabled = st.checkbox("启用智能避障", value=True)
         
@@ -590,10 +713,12 @@ if page == "🗺️ 航线规划与避障":
         # 预设障碍物模板
         obstacle_templates = {
             "自定义": None,
-            "高楼 (半径30m, 高100m)": (30, 100),
-            "塔吊 (半径20m, 高80m)": (20, 80),
-            "山峰 (半径100m, 高150m)": (100, 150),
-            "电线塔 (半径15m, 高60m)": (15, 60)
+            "低矮建筑 (半径20m, 高15m) - 可飞越": (20, 15),
+            "中等建筑 (半径30m, 高40m) - 需绕行": (30, 40),
+            "高楼 (半径40m, 高80m) - 需绕行": (40, 80),
+            "超高建筑 (半径50m, 高120m) - 需绕行": (50, 120),
+            "山峰 (半径100m, 高150m) - 需绕行": (100, 150),
+            "电线塔 (半径15m, 高60m) - 需绕行": (15, 60)
         }
         
         template = st.selectbox("选择障碍物类型", list(obstacle_templates.keys()))
@@ -610,7 +735,14 @@ if page == "🗺️ 航线规划与避障":
         with col_obs3:
             st.session_state.obstacle_radius = st.slider("半径 (m)", 10, 150, st.session_state.obstacle_radius)
         with col_obs4:
-            st.session_state.obstacle_height = st.slider("高度 (m)", 20, 200, st.session_state.obstacle_height)
+            # 障碍物高度可以高于飞行高度
+            st.session_state.obstacle_height = st.slider("高度 (m)", 5, 200, st.session_state.obstacle_height)
+        
+        # 显示障碍物类型判断
+        if st.session_state.obstacle_height >= st.session_state.flight_altitude:
+            st.error(f"⚠️ 此障碍物高度({st.session_state.obstacle_height}m) ≥ 飞行高度({st.session_state.flight_altitude}m)\n\n**无人机将绕行（水平避让）**")
+        else:
+            st.success(f"✓ 此障碍物高度({st.session_state.obstacle_height}m) < 飞行高度({st.session_state.flight_altitude}m)\n\n**无人机可以飞越**")
         
         col_obs_btn1, col_obs_btn2 = st.columns(2)
         with col_obs_btn1:
@@ -623,14 +755,18 @@ if page == "🗺️ 航线规划与避障":
                     else:
                         obs_lat, obs_lon = obs_lat_input, obs_lon_input
                     
+                    # 判断障碍物类型
+                    obs_type = "需绕行" if st.session_state.obstacle_height >= st.session_state.flight_altitude else "可飞越"
+                    obs_name = f"障碍物{len(st.session_state.obstacles)+1}({obs_type})"
+                    
                     obs = Obstacle(obs_lat, obs_lon, st.session_state.obstacle_radius, 
-                                  st.session_state.obstacle_height, f"障碍物{len(st.session_state.obstacles)+1}")
+                                  st.session_state.obstacle_height, obs_name)
                     st.session_state.obstacles.append(obs)
                     st.session_state.path_planner.add_obstacle(obs_lat, obs_lon, 
                                                                st.session_state.obstacle_radius, 
                                                                st.session_state.obstacle_height, 
-                                                               obs.name)
-                    st.success(f"障碍物已添加！")
+                                                               obs_name)
+                    st.success(f"障碍物已添加！类型: {obs_type}")
                     st.rerun()
                 else:
                     st.error("请先设置A点和B点")
@@ -644,13 +780,17 @@ if page == "🗺️ 航线规划与避障":
         if st.session_state.obstacles:
             with st.expander(f"📋 当前障碍物列表 ({len(st.session_state.obstacles)}个)"):
                 for i, obs in enumerate(st.session_state.obstacles):
-                    st.write(f"#{i+1}: 位置({obs.lat:.4f}, {obs.lon:.4f}), 半径{obs.radius}m, 高度{obs.height}m")
+                    obs_type = "🔴 需绕行" if obs.height >= st.session_state.flight_altitude else "🟢 可飞越"
+                    st.write(f"#{i+1}: {obs_type} | 位置({obs.lat:.4f}, {obs.lon:.4f}), 半径{obs.radius}m, 高度{obs.height}m")
         
         st.markdown("---")
         
         # 路径规划按钮
         if st.button("🧮 智能规划避障路径", type="primary", use_container_width=True):
             if st.session_state.point_a and st.session_state.point_b:
+                # 更新路径规划器的最大高度
+                st.session_state.path_planner.set_max_altitude(st.session_state.flight_altitude)
+                
                 # 创建起点和终点
                 start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
                                    st.session_state.flight_altitude, cmd=22)
@@ -665,7 +805,26 @@ if page == "🗺️ 航线规划与避障":
                         # 统计避障信息
                         avoidance_count = len(path) - 2
                         total_dist = sum([st.session_state.path_planner.haversine_distance(path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon) for i in range(len(path)-1)])
-                        st.success(f"✅ 避障路径规划完成！\n- 总航点数: {len(path)}\n- 绕行次数: {avoidance_count}\n- 预计飞行距离: {total_dist:.0f}m")
+                        
+                        # 分析路径类型
+                        detour_count = 0
+                        climb_count = 0
+                        for i in range(1, len(path)-1):
+                            prev_wp = path[i-1]
+                            curr_wp = path[i]
+                            # 判断是绕行还是爬升
+                            if abs(curr_wp.lat - prev_wp.lat) > 0.0001 or abs(curr_wp.lon - prev_wp.lon) > 0.0001:
+                                detour_count += 1
+                            elif curr_wp.alt > prev_wp.alt:
+                                climb_count += 1
+                        
+                        st.success(f"""
+                        ✅ 避障路径规划完成！
+                        - 总航点数: {len(path)}
+                        - 预计飞行距离: {total_dist:.0f}m
+                        - 🔄 绕行点: {detour_count}个
+                        - ⬆️ 爬升点: {climb_count}个
+                        """)
                 else:
                     st.session_state.planned_path = [start_wp, end_wp]
                     dist = st.session_state.path_planner.haversine_distance(
@@ -696,7 +855,15 @@ if page == "🗺️ 航线规划与避障":
                 st.session_state.send_log.append(send_entry)
                 st.session_state.send_count += 1
                 
-                st.success(f"📡 航线已上传到飞控！\n- 航点数: {len(st.session_state.planned_path)}\n- 避障点: {len([wp for wp in st.session_state.planned_path[1:-1] if wp.alt > st.session_state.flight_altitude])}")
+                # 统计避障信息
+                detour_count = sum(1 for i in range(1, len(st.session_state.planned_path)-1) 
+                                  if abs(st.session_state.planned_path[i].lat - st.session_state.planned_path[i-1].lat) > 0.0001)
+                
+                st.success(f"""
+                📡 航线已上传到飞控！
+                - 总航点数: {len(st.session_state.planned_path)}
+                - 避障机动点: {detour_count}个
+                """)
                 st.balloons()
 
 # ==================== 飞行仿真监控页面 ====================
@@ -910,7 +1077,7 @@ elif page == "💓 MAVLink通信":
                     <span style="color:#FF6B6B;">{log.get('type_name', 'UNKNOWN')}</span> | 
                     <span style="color:#FFE66D;">{log.get('status_name', 'UNKNOWN')}</span>
                 </div>
-                """, unsafe_add_html=True)
+                """, unsafe_allow_html=True)
         else:
             st.info("暂无接收记录")
     
@@ -963,4 +1130,4 @@ elif page == "💓 MAVLink通信":
         st.rerun()
 
 st.markdown("---")
-st.caption(f"MAVLink Ground Control Station | 3D避障航线规划系统 v2.1 | 支持坐标系转换 | 北京时间 (UTC+8)")
+st.caption(f"MAVLink Ground Control Station | 3D避障航线规划系统 v2.2 | 智能绕行算法 | 北京时间 (UTC+8)")
