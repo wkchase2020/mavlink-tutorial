@@ -10,15 +10,26 @@ from streamlit_folium import st_folium
 
 # ==================== 坐标系转换工具类 ====================
 class CoordinateConverter:
-    """统一坐标系转换工具类，避免代码重复"""
+    """
+    坐标系转换工具类
     
-    X_PI = 3.14159265358979324 * 3000.0 / 180.0
+    重要说明：
+    - folium 地图使用 WGS-84 坐标 (EPSG:4326)
+    - 中国地图（高德、百度）使用 GCJ-02 坐标（火星坐标系）
+    - 所有内部数据统一使用 WGS-84 (lat, lon) 格式存储
+    - 用户界面根据选择进行坐标转换
+    
+    参数约定：
+    - 所有函数使用 (lat, lon) 顺序（与地理惯例一致）
+    """
+    
     PI = 3.1415926535897932384626
     A = 6378245.0
     EE = 0.00669342162296594323
     
     @staticmethod
-    def transformlat(lng, lat):
+    def _transformlat(lng, lat):
+        """内部转换辅助函数 - 注意参数是经度、纬度"""
         ret = -100.0 + 2.0 * lng + 3.0 * lat + 0.2 * lat * lat + 0.1 * lng * lat + 0.2 * math.sqrt(abs(lng))
         ret += (20.0 * math.sin(6.0 * lng * CoordinateConverter.PI) + 20.0 * math.sin(2.0 * lng * CoordinateConverter.PI)) * 2.0 / 3.0
         ret += (20.0 * math.sin(lat * CoordinateConverter.PI) + 40.0 * math.sin(lat / 3.0 * CoordinateConverter.PI)) * 2.0 / 3.0
@@ -26,7 +37,8 @@ class CoordinateConverter:
         return ret
     
     @staticmethod
-    def transformlng(lng, lat):
+    def _transformlng(lng, lat):
+        """内部转换辅助函数 - 注意参数是经度、纬度"""
         ret = 300.0 + lng + 2.0 * lat + 0.1 * lng * lng + 0.1 * lng * lat + 0.1 * math.sqrt(abs(lng))
         ret += (20.0 * math.sin(6.0 * lng * CoordinateConverter.PI) + 20.0 * math.sin(2.0 * lng * CoordinateConverter.PI)) * 2.0 / 3.0
         ret += (20.0 * math.sin(lng * CoordinateConverter.PI) + 40.0 * math.sin(lng / 3.0 * CoordinateConverter.PI)) * 2.0 / 3.0
@@ -34,17 +46,22 @@ class CoordinateConverter:
         return ret
     
     @staticmethod
-    def out_of_china(lng, lat):
+    def _out_of_china(lng, lat):
+        """判断是否在中国境外"""
         return not (lng > 73.66 and lng < 135.05 and lat > 3.86 and lat < 53.55)
     
     @classmethod
-    def gcj02_to_wgs84(cls, lng, lat):
-        """GCJ-02 (火星坐标系) 转 WGS-84"""
-        if cls.out_of_china(lng, lat):
-            return lng, lat
+    def gcj02_to_wgs84(cls, lat, lon):
+        """
+        GCJ-02 (火星坐标系) 转 WGS-84
+        参数: (lat, lon) - 纬度, 经度
+        返回: (lat, lon) - 纬度, 经度
+        """
+        if cls._out_of_china(lon, lat):
+            return lat, lon
         
-        dlat = cls.transformlat(lng - 105.0, lat - 35.0)
-        dlng = cls.transformlng(lng - 105.0, lat - 35.0)
+        dlat = cls._transformlat(lon - 105.0, lat - 35.0)
+        dlng = cls._transformlng(lon - 105.0, lat - 35.0)
         radlat = lat / 180.0 * cls.PI
         magic = math.sin(radlat)
         magic = 1 - cls.EE * magic * magic
@@ -52,17 +69,21 @@ class CoordinateConverter:
         dlat = (dlat * 180.0) / ((cls.A * (1 - cls.EE)) / (magic * sqrtmagic) * cls.PI)
         dlng = (dlng * 180.0) / (cls.A / sqrtmagic * math.cos(radlat) * cls.PI)
         mglat = lat + dlat
-        mglng = lng + dlng
-        return lng * 2 - mglng, lat * 2 - mglat
+        mglng = lon + dlng
+        return lat * 2 - mglat, lon * 2 - mglng
     
     @classmethod
-    def wgs84_to_gcj02(cls, lng, lat):
-        """WGS-84 转 GCJ-02 (火星坐标系)"""
-        if cls.out_of_china(lng, lat):
-            return lng, lat
+    def wgs84_to_gcj02(cls, lat, lon):
+        """
+        WGS-84 转 GCJ-02 (火星坐标系)
+        参数: (lat, lon) - 纬度, 经度
+        返回: (lat, lon) - 纬度, 经度
+        """
+        if cls._out_of_china(lon, lat):
+            return lat, lon
         
-        dlat = cls.transformlat(lng - 105.0, lat - 35.0)
-        dlng = cls.transformlng(lng - 105.0, lat - 35.0)
+        dlat = cls._transformlat(lon - 105.0, lat - 35.0)
+        dlng = cls._transformlng(lon - 105.0, lat - 35.0)
         radlat = lat / 180.0 * cls.PI
         magic = math.sin(radlat)
         magic = 1 - cls.EE * magic * magic
@@ -70,23 +91,49 @@ class CoordinateConverter:
         dlat = (dlat * 180.0) / ((cls.A * (1 - cls.EE)) / (magic * sqrtmagic) * cls.PI)
         dlng = (dlng * 180.0) / (cls.A / sqrtmagic * math.cos(radlat) * cls.PI)
         mglat = lat + dlat
-        mglng = lng + dlng
-        return mglng, mglat
+        mglng = lon + dlng
+        return mglat, mglng
     
     @classmethod
-    def to_display_coords(cls, lat, lon, coord_system='WGS-84'):
-        """将内部 WGS-84 坐标转换为显示坐标"""
+    def to_map_display(cls, lat, lon, coord_system='WGS-84'):
+        """
+        将内部 WGS-84 坐标转换为地图显示坐标
+        - 如果用户选择 GCJ-02，需要将 WGS-84 转为 GCJ-02 显示
+        - 如果用户选择 WGS-84，直接显示
+        
+        注意：folium 内部使用 WGS-84，但如果用户期望看到 GCJ-02 坐标，我们需要转换
+        """
         if coord_system == 'GCJ-02':
-            lon_gcj, lat_gcj = cls.wgs84_to_gcj02(lon, lat)
-            return [lat_gcj, lon_gcj]
-        return [lat, lon]
+            # 内部 WGS-84 -> 显示 GCJ-02
+            return cls.wgs84_to_gcj02(lat, lon)
+        return lat, lon
     
     @classmethod
-    def from_input_coords(cls, lat, lon, coord_system='WGS-84'):
-        """将输入坐标转换为内部 WGS-84 坐标"""
+    def from_user_input(cls, lat, lon, coord_system='WGS-84'):
+        """
+        将用户输入坐标转换为内部 WGS-84 坐标
+        - 如果用户输入 GCJ-02，需要转为 WGS-84 存储
+        - 如果用户输入 WGS-84，直接存储
+        """
         if coord_system == 'GCJ-02':
-            lon_wgs, lat_wgs = cls.gcj02_to_wgs84(lon, lat)
-            return lat_wgs, lon_wgs
+            # 输入 GCJ-02 -> 内部 WGS-84
+            return cls.gcj02_to_wgs84(lat, lon)
+        return lat, lon
+    
+    @classmethod
+    def from_map_drawing(cls, lat, lon):
+        """
+        处理地图绘制返回的坐标
+        
+        重要：folium/Leaflet.Draw 返回的是 WGS-84 坐标
+        但如果用户在中国使用，可能需要考虑底图偏移问题
+        
+        实际上，folium 使用的是标准 WGS-84，不需要转换
+        但如果用户期望输入是 GCJ-02，我们需要将 WGS-84 转为 GCJ-02 再转回来？
+        
+        简化处理：地图绘制总是返回 WGS-84，直接存储
+        用户选择坐标系只影响手动输入的坐标
+        """
         return lat, lon
 
 
@@ -227,7 +274,6 @@ class Obstacle:
     def line_intersects(self, p1, p2):
         """检查线段是否与障碍物相交"""
         if self.type == "circle":
-            # 对圆形进行采样检测
             num_samples = 20
             for i in range(num_samples + 1):
                 t = i / num_samples
@@ -237,7 +283,6 @@ class Obstacle:
                     return True
             return False
         
-        # 检查线段是否与多边形任何边相交
         return line_intersects_polygon(p1, p2, self.points)
 
 
@@ -245,9 +290,9 @@ class GridPathPlanner:
     """增强版网格A*路径规划器"""
     def __init__(self):
         self.obstacles = []
-        self.safety_margin = 40  # 增加安全边距到40米
-        self.grid_size = 8  # 减小网格到8米，提高精度
-        self.max_iterations = 20000  # 增加最大迭代次数
+        self.safety_margin = 40
+        self.grid_size = 8
+        self.max_iterations = 20000
     
     def add_polygon_obstacle(self, points, height, name="多边形障碍物"):
         obs = Obstacle(points, height, name, "polygon")
@@ -273,7 +318,7 @@ class GridPathPlanner:
         return max(obs.height for obs in self.obstacles)
     
     def should_force_avoidance(self, flight_alt):
-        """判断是否需要强制绕行（有障碍物高于飞行高度）"""
+        """判断是否需要强制绕行"""
         for obs in self.obstacles:
             if obs.height >= flight_alt:
                 return True
@@ -292,12 +337,9 @@ class GridPathPlanner:
     def is_collision(self, lat, lon, flight_alt):
         """检查是否碰撞（严格模式）"""
         for obs in self.obstacles:
-            # 【关键修复】如果障碍物高度 >= 飞行高度，必须绕行
             if obs.height >= flight_alt:
-                # 严格检查，包括安全边距
                 if obs.is_inside(lat, lon, self.safety_margin):
                     return True
-            # 如果障碍物低于飞行高度，但飞行高度不够高（低于障碍物+15米），也检查
             elif flight_alt < obs.height + 15:
                 if obs.is_inside(lat, lon, self.safety_margin):
                     return True
@@ -306,12 +348,9 @@ class GridPathPlanner:
     def line_hits_obstacle(self, p1, p2, flight_alt):
         """精确检测线段是否与任何障碍物相交"""
         for obs in self.obstacles:
-            # 【关键修复】如果障碍物高度 >= 飞行高度，必须绕行
             if obs.height >= flight_alt:
-                # 检查线段是否与障碍物边界相交
                 if obs.line_intersects(p1, p2):
                     return True
-                # 检查中点是否在障碍物内
                 mid_lat = (p1[0] + p2[0]) / 2
                 mid_lon = (p1[1] + p2[1]) / 2
                 if obs.is_inside(mid_lat, mid_lon, self.safety_margin):
@@ -343,7 +382,6 @@ class GridPathPlanner:
         end = (end_wp.lat, end_wp.lon)
         flight_alt = start_wp.alt
         
-        # 检查起点和终点
         if self.is_collision(start[0], start[1], flight_alt):
             st.error("起点在障碍物内或安全边界内，请调整起点位置")
             return None
@@ -351,15 +389,12 @@ class GridPathPlanner:
             st.error("终点在障碍物内或安全边界内，请调整终点位置")
             return None
         
-        # 计算起点到终点的距离
         direct_distance = self.haversine_distance(start[0], start[1], end[0], end[1])
         
-        # 检查直线路径
         if not self.line_hits_obstacle(start, end, flight_alt):
             return [start_wp, end_wp]
         
-        # 【关键修复】扩大搜索范围，根据距离动态调整
-        margin_deg = max(0.008, min(0.02, direct_distance / 100000))  # 根据距离调整，至少800米
+        margin_deg = max(0.008, min(0.02, direct_distance / 100000))
         
         lat_min = min(start[0], end[0]) - margin_deg
         lat_max = max(start[0], end[0]) + margin_deg
@@ -372,17 +407,15 @@ class GridPathPlanner:
         start_grid = self.latlon_to_grid(start[0], start[1], base_lat, base_lon)
         end_grid = self.latlon_to_grid(end[0], end[1], base_lat, base_lon)
         
-        # 【关键修复】使用16方向搜索（增加斜向和更远距离）
         directions = [
-            (0,1), (1,0), (0,-1), (-1,0),  # 4正方向
-            (1,1), (1,-1), (-1,1), (-1,-1),  # 4对角方向
-            (0,2), (2,0), (0,-2), (-2,0),  # 远距离正方向
-            (2,2), (2,-2), (-2,2), (-2,-2),  # 远距离对角方向
+            (0,1), (1,0), (0,-1), (-1,0),
+            (1,1), (1,-1), (-1,1), (-1,-1),
+            (0,2), (2,0), (0,-2), (-2,0),
+            (2,2), (2,-2), (-2,2), (-2,-2),
         ]
         
-        # A*算法
         open_set = [(0, 0, start_grid[0], start_grid[1], [start_grid])]
-        visited = {}  # 使用字典存储最佳代价
+        visited = {}
         
         iteration = 0
         best_path = None
@@ -392,7 +425,6 @@ class GridPathPlanner:
             iteration += 1
             f_cost, g_cost, x, y, path = heapq.heappop(open_set)
             
-            # 检查是否到达终点（允许2个网格误差）
             if abs(x - end_grid[0]) <= 2 and abs(y - end_grid[1]) <= 2:
                 waypoints = [start_wp]
                 for grid in path[1:]:
@@ -402,7 +434,6 @@ class GridPathPlanner:
                 waypoints.append(end_wp)
                 waypoints[-1].seq = len(waypoints) - 1
                 
-                # 路径平滑
                 waypoints = self.smooth_path(waypoints, flight_alt)
                 
                 current_dist = sum(self.haversine_distance(
@@ -413,7 +444,6 @@ class GridPathPlanner:
                     best_dist = current_dist
                     best_path = waypoints
                 
-                # 找到一条路径后继续搜索，看是否有更短的
                 if iteration > 5000:
                     break
                 continue
@@ -425,20 +455,16 @@ class GridPathPlanner:
             
             for dx, dy in directions:
                 nx, ny = x + dx, y + dy
-                
                 new_key = (nx, ny)
                 
-                # 检查网格点是否安全
                 lat, lon = self.grid_to_latlon(nx, ny, base_lat, base_lon)
                 
-                # 边界检查
                 if not (lat_min <= lat <= lat_max and lon_min <= lon <= lon_max):
                     continue
                 
                 if self.is_collision(lat, lon, flight_alt):
                     continue
                 
-                # 检查从当前点到新点的路径是否穿越障碍物
                 curr_lat, curr_lon = self.grid_to_latlon(x, y, base_lat, base_lon)
                 if self.line_hits_obstacle((curr_lat, curr_lon), (lat, lon), flight_alt):
                     continue
@@ -449,7 +475,6 @@ class GridPathPlanner:
                 if new_key in visited and visited[new_key] <= new_g_cost:
                     continue
                 
-                # 启发式函数：到终点的距离
                 h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
                 
                 heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
@@ -468,7 +493,6 @@ class GridPathPlanner:
         smoothed = [waypoints[0]]
         i = 0
         while i < len(waypoints) - 1:
-            # 尝试找到最远可以直接到达的点
             j = len(waypoints) - 1
             while j > i + 1:
                 p1 = (waypoints[i].lat, waypoints[i].lon)
@@ -479,26 +503,23 @@ class GridPathPlanner:
             smoothed.append(waypoints[j])
             i = j
         
-        # 重新编号
         for idx, wp in enumerate(smoothed):
             wp.seq = idx
         
         return smoothed
     
     def plan_climb_over(self, start_wp, end_wp, max_altitude):
-        """爬升飞越（仅当没有障碍物高于原始飞行高度时可用）"""
+        """爬升飞越"""
         start = (start_wp.lat, start_wp.lon)
         end = (end_wp.lat, end_wp.lon)
         
-        # 【关键修复】检查是否有障碍物高于原始飞行高度
         for obs in self.obstacles:
             if obs.height >= start_wp.alt:
                 st.error("存在高于飞行高度的障碍物，无法使用爬升飞越策略")
                 return None
         
-        # 找出路径上的最高障碍物
         max_obs_height = 0
-        steps = 50  # 增加采样密度
+        steps = 50
         
         for i in range(steps + 1):
             t = i / steps
@@ -512,29 +533,23 @@ class GridPathPlanner:
         if max_obs_height == 0:
             return [start_wp, end_wp]
         
-        # 计算所需飞越高度
-        fly_alt = max_obs_height + 25  # 增加安全余量到25米
+        fly_alt = max_obs_height + 25
         if fly_alt > max_altitude:
             st.warning(f"需要飞越高度{fly_alt}m超过最大限制{max_altitude}m，无法执行爬升飞越")
             return None
         
-        # 构建爬升路径
         path = [start_wp]
         dist_total = self.haversine_distance(start[0], start[1], end[0], end[1])
         
-        # 在障碍物前开始爬升
         if dist_total > 100:
-            # 爬升点（距离起点20%处）
             climb_lat = start[0] + (end[0] - start[0]) * 0.2
             climb_lon = start[1] + (end[1] - start[1]) * 0.2
             path.append(Waypoint(climb_lat, climb_lon, fly_alt, 16, 1))
             
-            # 保持高度的中点
             mid_lat = (start[0] + end[0]) / 2
             mid_lon = (start[1] + end[1]) / 2
             path.append(Waypoint(mid_lat, mid_lon, fly_alt, 16, len(path)))
             
-            # 下降点（距离终点20%处）
             descend_lat = start[0] + (end[0] - start[0]) * 0.8
             descend_lon = start[1] + (end[1] - start[1]) * 0.8
             path.append(Waypoint(descend_lat, descend_lon, fly_alt, 16, len(path)))
@@ -563,8 +578,6 @@ def init_session_state():
         'planner': GridPathPlanner(),
         'point_a': None, 
         'point_b': None,
-        'point_a_gcj': None, 
-        'point_b_gcj': None,
         'flight_altitude': 50,
         'max_altitude': 120,
         'current_waypoint_index': 0,
@@ -572,9 +585,6 @@ def init_session_state():
         'animation_step': 0,
         'coord_system': 'WGS-84',
         'pending_drawing': None,
-        'rect_width': 50,
-        'rect_height': 80,
-        'rect_rotation': 0,
         'debug_info': []
     }
     for key, value in defaults.items():
@@ -609,7 +619,6 @@ with st.sidebar:
     
     st.metric("障碍物数量", len(st.session_state.planner.obstacles))
     
-    # 显示最高障碍物
     max_obs_h = st.session_state.planner.get_max_obstacle_height()
     if max_obs_h > 0:
         st.metric("最高障碍物", f"{max_obs_h}m")
@@ -627,39 +636,19 @@ if page == "🗺️ 航线规划":
     st.title("🚁 MAVLink 地面站 - 智能避障系统")
     st.caption("强制绕行避障 | 坐标系自动转换 | 智能高度判断")
     
-    with st.expander("📖 使用说明", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("""
-            ### 📋 操作步骤：
-            1. **设置A/B点**：选择坐标系，输入起点终点坐标
-            2. **添加障碍物**：使用地图绘制或参数化矩形
-            3. **规划路径**：系统自动判断绕行或爬升策略
-            
-            ### ⚠️ 重要提示：
-            - 当障碍物高度 ≥ 飞行高度时，**强制水平绕行**
-            - 当障碍物高度 < 飞行高度时，可选择爬升飞越
-            - 所有内部计算使用WGS-84坐标，确保精度
-            """)
-        with col2:
-            st.markdown(f"""
-            ### 🔧 当前配置：
-            - **安全边距**: {st.session_state.planner.safety_margin}米
-            - **网格精度**: {st.session_state.planner.grid_size}米
-            - **最大迭代**: {st.session_state.planner.max_iterations}次
-            - **当前坐标系**: {st.session_state.coord_system}
-            """)
-            
-            # 显示障碍物高度对比
-            max_obs_h = st.session_state.planner.get_max_obstacle_height()
-            if max_obs_h > 0:
-                st.markdown("### 📊 高度对比：")
-                st.markdown(f"- 飞行高度: **{st.session_state.flight_altitude}m**")
-                st.markdown(f"- 最高障碍物: **{max_obs_h}m**")
-                if max_obs_h >= st.session_state.flight_altitude:
-                    st.error("🔒 强制绕行模式已激活")
-                else:
-                    st.success("✅ 爬升飞越可用")
+    with st.expander("📖 坐标系说明", expanded=True):
+        st.markdown("""
+        ### 📍 坐标系说明
+        
+        **WGS-84**: 国际标准GPS坐标系，folium地图使用此坐标系
+        **GCJ-02**: 中国国测局坐标系（火星坐标），高德/百度地图使用此坐标系
+        
+        ### ⚠️ 重要提示
+        - **内部存储**: 所有数据统一使用 WGS-84 坐标存储
+        - **地图显示**: folium 原生使用 WGS-84 坐标
+        - **用户输入**: 根据选择的坐标系自动转换
+        - **地图绘制**: 返回 WGS-84 坐标，直接存储
+        """)
     
     col_map, col_ctrl = st.columns([3, 2])
     
@@ -672,10 +661,8 @@ if page == "🗺️ 航线规划":
         else:
             center = st.session_state.map_center
         
-        # 地图显示坐标转换
-        display_center = CoordinateConverter.to_display_coords(center[0], center[1], st.session_state.coord_system)
-        
-        m = folium.Map(location=display_center, zoom_start=16, tiles="CartoDB positron")
+        # folium 使用 WGS-84 坐标，直接显示
+        m = folium.Map(location=center, zoom_start=16, tiles="CartoDB positron")
         
         Draw(
             draw_options={
@@ -697,53 +684,39 @@ if page == "🗺️ 航线规划":
             control=True
         ).add_to(m)
         
-        # 显示A/B点
+        # 显示A/B点 - 内部存储的是 WGS-84，直接显示
         if st.session_state.point_a:
-            pos = CoordinateConverter.to_display_coords(st.session_state.point_a[0], st.session_state.point_a[1], st.session_state.coord_system)
-            folium.Marker(pos, 
-                         popup=f"起点A<br>WGS84: {st.session_state.point_a[0]:.6f}, {st.session_state.point_a[1]:.6f}",
+            lat, lon = st.session_state.point_a
+            folium.Marker([lat, lon], 
+                         popup=f"起点A<br>WGS84: {lat:.6f}, {lon:.6f}<br>GCJ02: {CoordinateConverter.wgs84_to_gcj02(lat, lon)[0]:.6f}, {CoordinateConverter.wgs84_to_gcj02(lat, lon)[1]:.6f}",
                          icon=folium.Icon(color='green', icon='play', prefix='glyphicon')).add_to(m)
-            folium.Circle(pos, radius=8, color='green', fill=True, fillOpacity=0.3).add_to(m)
+            folium.Circle([lat, lon], radius=8, color='green', fill=True, fillOpacity=0.3).add_to(m)
         
         if st.session_state.point_b:
-            pos = CoordinateConverter.to_display_coords(st.session_state.point_b[0], st.session_state.point_b[1], st.session_state.coord_system)
-            folium.Marker(pos,
-                         popup=f"终点B<br>WGS84: {st.session_state.point_b[0]:.6f}, {st.session_state.point_b[1]:.6f}", 
+            lat, lon = st.session_state.point_b
+            folium.Marker([lat, lon],
+                         popup=f"终点B<br>WGS84: {lat:.6f}, {lon:.6f}<br>GCJ02: {CoordinateConverter.wgs84_to_gcj02(lat, lon)[0]:.6f}, {CoordinateConverter.wgs84_to_gcj02(lat, lon)[1]:.6f}", 
                          icon=folium.Icon(color='red', icon='stop', prefix='glyphicon')).add_to(m)
-            folium.Circle(pos, radius=8, color='red', fill=True, fillOpacity=0.3).add_to(m)
+            folium.Circle([lat, lon], radius=8, color='red', fill=True, fillOpacity=0.3).add_to(m)
         
-        # 显示障碍物
+        # 显示障碍物 - 内部存储 WGS-84，直接显示
         for i, obs in enumerate(st.session_state.planner.obstacles):
             color = 'red' if obs.height >= st.session_state.flight_altitude else 'orange'
             
-            if obs.type == "polygon":
-                display_points = [CoordinateConverter.to_display_coords(p[0], p[1], st.session_state.coord_system) for p in obs.points]
+            if obs.type in ["polygon", "rectangle"]:
+                # points 存储为 (lat, lon) 列表
                 folium.Polygon(
-                    locations=display_points,
-                    popup=f"{obs.name}<br>高度:{obs.height}m<br>类型:多边形",
+                    locations=obs.points,
+                    popup=f"{obs.name}<br>高度:{obs.height}m<br>类型:{obs.type}",
                     color=color,
                     fill=True,
                     fillColor=color,
                     fillOpacity=0.5,
                     weight=3
                 ).add_to(m)
-            elif obs.type == "rectangle":
-                display_points = [CoordinateConverter.to_display_coords(p[0], p[1], st.session_state.coord_system) for p in obs.points]
-                folium.Polygon(
-                    locations=display_points,
-                    popup=f"{obs.name}<br>高度:{obs.height}m<br>旋转:{obs.rotation}°",
-                    color=color,
-                    fill=True,
-                    fillColor=color,
-                    fillOpacity=0.5,
-                    weight=3
-                ).add_to(m)
-                center_pos = CoordinateConverter.to_display_coords(obs.center_lat, obs.center_lon, st.session_state.coord_system)
-                folium.CircleMarker(center_pos, radius=3, color='black', fill=True).add_to(m)
             else:
-                center_pos = CoordinateConverter.to_display_coords(obs.center_lat, obs.center_lon, st.session_state.coord_system)
                 folium.Circle(
-                    center_pos,
+                    [obs.center_lat, obs.center_lon],
                     radius=obs.radius,
                     popup=f"{obs.name}<br>高度:{obs.height}m",
                     color=color,
@@ -753,29 +726,27 @@ if page == "🗺️ 航线规划":
         
         # 显示选中的路径
         if st.session_state.selected_path_type and st.session_state.waypoints:
-            path_coords = [CoordinateConverter.to_display_coords(wp.lat, wp.lon, st.session_state.coord_system) for wp in st.session_state.waypoints]
+            path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
             
             if st.session_state.selected_path_type == 'horizontal':
                 AntPath(path_coords, color='blue', weight=6, opacity=0.9, 
                        dash_array=[15, 10], delay=800).add_to(m)
                 for i, wp in enumerate(st.session_state.waypoints):
-                    pos = CoordinateConverter.to_display_coords(wp.lat, wp.lon, st.session_state.coord_system)
                     color = 'green' if i == 0 else 'red' if i == len(st.session_state.waypoints)-1 else 'blue'
-                    folium.CircleMarker(pos, radius=4, color=color, fill=True,
+                    folium.CircleMarker([wp.lat, wp.lon], radius=4, color=color, fill=True,
                                        popup=f'航点{i}<br>高度:{wp.alt}m').add_to(m)
             
             elif st.session_state.selected_path_type == 'climb':
                 AntPath(path_coords, color='green', weight=6, opacity=0.9,
                        dash_array=[15, 10], delay=800).add_to(m)
                 for i, wp in enumerate(st.session_state.waypoints):
-                    pos = CoordinateConverter.to_display_coords(wp.lat, wp.lon, st.session_state.coord_system)
                     color = 'darkgreen' if wp.alt > st.session_state.flight_altitude + 5 else 'green'
-                    folium.CircleMarker(pos, radius=5, color=color, fill=True,
+                    folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True,
                                        popup=f'航点{i}<br>高度:{wp.alt}m').add_to(m)
         
         map_data = st_folium(m, width=800, height=600, key="main_map")
         
-        # 处理地图绘制
+        # 处理地图绘制 - folium 返回的是 WGS-84 坐标，直接存储
         if map_data and map_data.get("last_active_drawing"):
             drawing = map_data["last_active_drawing"]
             shape_id = f"{drawing.get('type')}_{id(drawing)}"
@@ -785,22 +756,21 @@ if page == "🗺️ 航线规划":
                 geom_type = drawing.get("type")
                 
                 if geom_type == "circle":
+                    # folium 返回 [lon, lat] 格式
                     center = drawing["geometry"]["coordinates"]
                     radius = drawing["properties"]["radius"]
-                    # 地图绘制返回的是GCJ-02，转换为WGS84存储
-                    lon_wgs, lat_wgs = CoordinateConverter.gcj02_to_wgs84(center[0], center[1])
+                    # 转换为 (lat, lon) 存储
                     st.session_state.pending_drawing = {
                         'type': 'circle',
-                        'center': (lat_wgs, lon_wgs),
+                        'center': (center[1], center[0]),  # (lat, lon)
                         'radius': radius
                     }
                     st.rerun()
                 elif geom_type in ["polygon", "rectangle"]:
+                    # folium 返回 [[lon, lat], ...] 格式
                     coords = drawing["geometry"]["coordinates"][0]
-                    points = []
-                    for c in coords[:-1]:
-                        lon_wgs, lat_wgs = CoordinateConverter.gcj02_to_wgs84(c[0], c[1])
-                        points.append((lat_wgs, lon_wgs))
+                    # 转换为 [(lat, lon), ...] 存储
+                    points = [(c[1], c[0]) for c in coords[:-1]]  # 最后一个点是重复的
                     st.session_state.pending_drawing = {
                         'type': 'polygon',
                         'points': points
@@ -815,23 +785,23 @@ if page == "🗺️ 航线规划":
         st.caption(f"输入坐标系: {st.session_state.coord_system}")
         c1, c2 = st.columns(2)
         
-        default_lat_a = 32.0603
-        default_lon_a = 118.7969
+        # 显示默认值：如果已设置，显示对应坐标系的值
+        default_lat_a, default_lon_a = 32.0603, 118.7969
         if st.session_state.point_a:
+            lat_wgs, lon_wgs = st.session_state.point_a
             if st.session_state.coord_system == 'GCJ-02':
-                lon_gcj, lat_gcj = CoordinateConverter.wgs84_to_gcj02(st.session_state.point_a[1], st.session_state.point_a[0])
+                lat_gcj, lon_gcj = CoordinateConverter.wgs84_to_gcj02(lat_wgs, lon_wgs)
                 default_lat_a, default_lon_a = lat_gcj, lon_gcj
             else:
-                default_lat_a, default_lon_a = st.session_state.point_a
+                default_lat_a, default_lon_a = lat_wgs, lon_wgs
         
         lat_a = c1.number_input("纬度", value=default_lat_a, format="%.6f", key="lat_a")
         lon_a = c2.number_input("经度", value=default_lon_a, format="%.6f", key="lon_a")
         
         if st.button("✅ 设置A点", key="set_a"):
-            lat_wgs, lon_wgs = CoordinateConverter.from_input_coords(lat_a, lon_a, st.session_state.coord_system)
+            # 将用户输入转换为 WGS-84 存储
+            lat_wgs, lon_wgs = CoordinateConverter.from_user_input(lat_a, lon_a, st.session_state.coord_system)
             st.session_state.point_a = (lat_wgs, lon_wgs)
-            if st.session_state.coord_system == 'GCJ-02':
-                st.session_state.point_a_gcj = (lat_a, lon_a)
             st.success(f"A点已设置 (WGS84: {lat_wgs:.6f}, {lon_wgs:.6f})")
             st.rerun()
         
@@ -839,23 +809,21 @@ if page == "🗺️ 航线规划":
         st.markdown("**📍 终点 B**")
         c3, c4 = st.columns(2)
         
-        default_lat_b = 32.0703
-        default_lon_b = 118.8069
+        default_lat_b, default_lon_b = 32.0703, 118.8069
         if st.session_state.point_b:
+            lat_wgs, lon_wgs = st.session_state.point_b
             if st.session_state.coord_system == 'GCJ-02':
-                lon_gcj, lat_gcj = CoordinateConverter.wgs84_to_gcj02(st.session_state.point_b[1], st.session_state.point_b[0])
+                lat_gcj, lon_gcj = CoordinateConverter.wgs84_to_gcj02(lat_wgs, lon_wgs)
                 default_lat_b, default_lon_b = lat_gcj, lon_gcj
             else:
-                default_lat_b, default_lon_b = st.session_state.point_b
+                default_lat_b, default_lon_b = lat_wgs, lon_wgs
         
         lat_b = c3.number_input("纬度", value=default_lat_b, format="%.6f", key="lat_b")
         lon_b = c4.number_input("经度", value=default_lon_b, format="%.6f", key="lon_b")
         
         if st.button("✅ 设置B点", key="set_b"):
-            lat_wgs, lon_wgs = CoordinateConverter.from_input_coords(lat_b, lon_b, st.session_state.coord_system)
+            lat_wgs, lon_wgs = CoordinateConverter.from_user_input(lat_b, lon_b, st.session_state.coord_system)
             st.session_state.point_b = (lat_wgs, lon_wgs)
-            if st.session_state.coord_system == 'GCJ-02':
-                st.session_state.point_b_gcj = (lat_b, lon_b)
             st.success(f"B点已设置 (WGS84: {lat_wgs:.6f}, {lon_wgs:.6f})")
             st.rerun()
         
@@ -914,16 +882,16 @@ if page == "🗺️ 航线规划":
             with col_add:
                 if st.button("✅ 确认添加", type="primary"):
                     if drawing['type'] == 'circle':
+                        lat, lon = drawing['center']
                         st.session_state.planner.add_circle_obstacle(
-                            drawing['center'][0], drawing['center'][1],
-                            drawing['radius'], obs_height, f"圆形({obs_height}m)"
+                            lat, lon, drawing['radius'], obs_height, f"圆形({obs_height}m)"
                         )
                     else:
                         st.session_state.planner.add_polygon_obstacle(
                             drawing['points'], obs_height, f"多边形({obs_height}m)"
                         )
                     st.session_state.pending_drawing = None
-                    st.success("✅ 障碍物已添加到WGS84坐标系")
+                    st.success("✅ 障碍物已添加")
                     st.rerun()
             
             with col_cancel:
@@ -935,12 +903,14 @@ if page == "🗺️ 航线规划":
         
         # 旋转矩形（参数化输入）
         with st.expander("⬜ 添加旋转矩形（参数化）"):
-            default_lat = st.session_state.point_a[0] if st.session_state.point_a else st.session_state.map_center[0]
-            default_lon = st.session_state.point_a[1] if st.session_state.point_a else st.session_state.map_center[1]
-            
-            if st.session_state.coord_system == 'GCJ-02' and st.session_state.point_a_gcj:
-                default_lat = st.session_state.point_a_gcj[0]
-                default_lon = st.session_state.point_a_gcj[1]
+            default_lat, default_lon = 32.0603, 118.7969
+            if st.session_state.point_a:
+                lat_wgs, lon_wgs = st.session_state.point_a
+                if st.session_state.coord_system == 'GCJ-02':
+                    lat_gcj, lon_gcj = CoordinateConverter.wgs84_to_gcj02(lat_wgs, lon_wgs)
+                    default_lat, default_lon = lat_gcj, lon_gcj
+                else:
+                    default_lat, default_lon = lat_wgs, lon_wgs
             
             rect_lat = st.number_input("中心纬度", value=default_lat, format="%.6f", key="rect_lat")
             rect_lon = st.number_input("中心经度", value=default_lon, format="%.6f", key="rect_lon")
@@ -950,7 +920,7 @@ if page == "🗺️ 航线规划":
             rect_obs_h = st.number_input("矩形高度(m)", 5, 300, 60, key="rect_obs_h")
             
             if st.button("➕ 添加旋转矩形"):
-                lat_wgs, lon_wgs = CoordinateConverter.from_input_coords(rect_lat, rect_lon, st.session_state.coord_system)
+                lat_wgs, lon_wgs = CoordinateConverter.from_user_input(rect_lat, rect_lon, st.session_state.coord_system)
                 
                 st.session_state.planner.add_rotated_rectangle_obstacle(
                     lat_wgs, lon_wgs, rect_width, rect_height,
@@ -984,7 +954,6 @@ if page == "🗺️ 航线规划":
         
         st.markdown("**🧭 路径规划**")
         
-        # 判断是否需要强制绕行
         force_avoidance = st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude)
         
         col_h, col_c = st.columns(2)
@@ -1008,7 +977,6 @@ if page == "🗺️ 航线规划":
                             path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon)
                             for i in range(len(path)-1))
                         
-                        # 验证路径
                         is_safe = True
                         for i in range(len(path)-1):
                             p1 = (path[i].lat, path[i].lon)
@@ -1018,19 +986,18 @@ if page == "🗺️ 航线规划":
                                 break
                         
                         if is_safe:
-                            st.success(f"✅ 水平绕行规划成功！{len(path)}个航点, {dist:.0f}m")
+                            st.success(f"✅ 水平绕行成功！{len(path)}个航点, {dist:.0f}m")
                         else:
-                            st.error("⚠️ 路径验证失败，请重新规划")
+                            st.error("⚠️ 路径验证失败")
                             st.session_state.waypoints = []
                     else:
-                        st.error("❌ 规划失败：无法找到可行的绕行路径")
+                        st.error("❌ 规划失败")
                         st.session_state.planned_path_horizontal = None
                         st.session_state.waypoints = []
                 
                 st.rerun()
         
         with col_c:
-            # 【关键修复】当障碍物高于飞行高度时，禁用爬升飞越
             climb_disabled = not can_plan or force_avoidance
             climb_help = "有障碍物高于飞行高度，强制绕行" if force_avoidance else ""
             
@@ -1078,7 +1045,6 @@ if page == "🗺️ 航线规划":
                                                  else st.session_state.planned_path_climb)
                     st.rerun()
             
-            # 安全验证
             if st.session_state.waypoints:
                 unsafe_segments = []
                 for i in range(len(st.session_state.waypoints)-1):
@@ -1157,39 +1123,31 @@ elif page == "✈️ 飞行监控":
                 else:
                     st.warning("⏸️ 任务已暂停")
             
-            # 地图显示
+            # 地图显示 - 直接使用 WGS-84 坐标
             center = st.session_state.drone_position if st.session_state.drone_position else [st.session_state.waypoints[0].lat, st.session_state.waypoints[0].lon]
-            display_center = CoordinateConverter.to_display_coords(center[0], center[1], st.session_state.coord_system)
             
-            m = folium.Map(location=display_center, zoom_start=17, tiles="CartoDB dark_matter")
+            m = folium.Map(location=center, zoom_start=17, tiles="CartoDB dark_matter")
             
-            # 显示完整航线
             if st.session_state.waypoints:
-                full_path = [CoordinateConverter.to_display_coords(wp.lat, wp.lon, st.session_state.coord_system) for wp in st.session_state.waypoints]
+                full_path = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
                 folium.PolyLine(full_path, color='blue', weight=3, opacity=0.6, dash_array='5,10').add_to(m)
                 
                 for i, wp in enumerate(st.session_state.waypoints):
-                    pos = CoordinateConverter.to_display_coords(wp.lat, wp.lon, st.session_state.coord_system)
                     color = 'green' if i == 0 else 'red' if i == len(st.session_state.waypoints)-1 else 'blue'
-                    folium.CircleMarker(pos, radius=4, color=color, fill=True, 
+                    folium.CircleMarker([wp.lat, wp.lon], radius=4, color=color, fill=True, 
                                        popup=f'航点{i}').add_to(m)
             
-            # 显示已飞路径
             if len(st.session_state.flight_path_history) > 1:
-                history_display = [CoordinateConverter.to_display_coords(p[0], p[1], st.session_state.coord_system) for p in st.session_state.flight_path_history]
-                folium.PolyLine(history_display, color='lime', weight=5, opacity=0.9).add_to(m)
+                folium.PolyLine(st.session_state.flight_path_history, color='lime', weight=5, opacity=0.9).add_to(m)
             
-            # 显示无人机位置
             if st.session_state.drone_position:
-                pos = CoordinateConverter.to_display_coords(st.session_state.drone_position[0], st.session_state.drone_position[1], st.session_state.coord_system)
-                folium.Marker(pos,
+                folium.Marker(st.session_state.drone_position,
                             icon=folium.Icon(color='orange', icon='plane', prefix='fa'),
                             popup="无人机当前位置").add_to(m)
-                folium.Circle(pos, radius=10, color='orange', fill=True, fillOpacity=0.3).add_to(m)
+                folium.Circle(st.session_state.drone_position, radius=10, color='orange', fill=True, fillOpacity=0.3).add_to(m)
             
             st_folium(m, width=800, height=500)
             
-            # 动画模拟
             if st.session_state.mission_executing and st.session_state.drone_position and curr < total - 1:
                 curr_wp = st.session_state.waypoints[curr]
                 next_wp = st.session_state.waypoints[curr + 1]
@@ -1246,4 +1204,4 @@ elif page == "📡 通信日志":
             st.rerun()
 
 st.markdown("---")
-st.caption("MAVLink GCS v5.2 | 智能避障 | 坐标系自动转换 | 北京时间 (UTC+8)")
+st.caption("MAVLink GCS v5.3 | 智能避障 | 坐标系自动转换 | 北京时间 (UTC+8)")
