@@ -46,7 +46,7 @@ def gcj02_to_wgs84(lng, lat):
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="MAVLink 地面站 - 多边形避障规划系统",
+    page_title="MAVLink 地面站 - 避障规划系统",
     page_icon="🚁",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -79,15 +79,12 @@ def point_in_polygon(lat, lon, polygon_points):
 
 def point_to_segment_distance(lat, lon, lat1, lon1, lat2, lon2):
     """计算点到线段的距离（米）"""
-    # 将经纬度转换为近似米制
     lat_diff = lat2 - lat1
     lon_diff = lon2 - lon1
     
     if abs(lat_diff) < 1e-10 and abs(lon_diff) < 1e-10:
-        # 线段退化为点
         return math.sqrt((lat - lat1)**2 + (lon - lon1)**2) * 111000
     
-    # 投影参数
     t = max(0, min(1, ((lat - lat1) * lat_diff + (lon - lon1) * lon_diff) / (lat_diff**2 + lon_diff**2)))
     
     proj_lat = lat1 + t * lat_diff
@@ -112,9 +109,6 @@ def rotate_point(cx, cy, x, y, angle_deg):
 def create_rotated_rectangle(center_lat, center_lon, width_m, height_m, rotation_deg):
     """
     创建旋转矩形，返回4个角点 [(lat,lon), ...]
-    width_m: 宽度（米，东西方向）
-    height_m: 高度（米，南北方向）
-    rotation_deg: 旋转角度（度，顺时针）
     """
     # 米转经纬度
     lat_offset = (height_m / 2) / 111000
@@ -148,15 +142,6 @@ class Waypoint:
 class Obstacle:
     """支持多边形和圆形的障碍物，新增旋转矩形支持"""
     def __init__(self, points, height, name="障碍物", obs_type="polygon", rotation=0, width=0, height_m=0):
-        """
-        points: 多边形顶点列表 [(lat1,lon1), (lat2,lon2), ...] 或 圆心(lat,lon)
-        height: 障碍物高度（米）
-        name: 名称
-        obs_type: "polygon"(多边形), "circle"(圆形), "rectangle"(旋转矩形)
-        rotation: 旋转角度（仅矩形有效）
-        width: 矩形宽度（米，仅矩形有效）
-        height_m: 矩形高度（米，仅矩形有效）
-        """
         self.points = points if isinstance(points, list) else [points]
         self.height = height
         self.name = name
@@ -169,7 +154,6 @@ class Obstacle:
         if obs_type == "polygon" and len(self.points) > 0:
             self.center_lat = sum(p[0] for p in self.points) / len(self.points)
             self.center_lon = sum(p[1] for p in self.points) / len(self.points)
-            # 计算近似半径
             self.radius = max(
                 math.sqrt((p[0]-self.center_lat)**2 + (p[1]-self.center_lon)**2) * 111000 
                 for p in self.points
@@ -189,7 +173,6 @@ class Obstacle:
             dist = math.sqrt((lat-self.center_lat)**2 + (lon-self.center_lon)**2) * 111000
             return dist < self.radius
         
-        # 多边形或矩形，使用射线法
         return point_in_polygon(lat, lon, self.points)
 
 class Node:
@@ -272,7 +255,7 @@ class PathPlanner:
         return False, None
     
     def get_neighbors(self, node, end_node, step_size=20):
-        """获取邻居节点"""
+        """获取邻居节点 - 修复浮点数range问题"""
         neighbors = []
         
         dlat = end_node.lat - node.lat
@@ -283,9 +266,10 @@ class PathPlanner:
             dlat_norm = dlat / dist
             dlon_norm = dlon / dist
             
-            # 16个方向
+            # 16个方向 - 使用整数range
             directions = []
-            for angle in range(0, 360, 22.5):
+            for i in range(16):  # 0到15，共16个方向
+                angle = i * 22.5  # 每22.5度一个方向
                 rad = math.radians(angle)
                 directions.append((
                     dlat_norm * math.cos(rad) - dlon_norm * math.sin(rad),
@@ -393,8 +377,10 @@ def init_session_state():
         'coord_system': 'WGS-84',
         'map_draw_data': None,
         'temp_obstacle_points': [],
+        'temp_obstacle_type': None,  # 'polygon', 'circle', 'rectangle'
+        'temp_circle_radius': 30,
         'obstacle_height_input': 40,
-        # 新增：旋转矩形参数
+        # 旋转矩形参数
         'rect_width': 50,
         'rect_height': 80,
         'rect_rotation': 0,
@@ -443,9 +429,8 @@ if page == "🗺️ 航线规划":
         
         1. **设置A/B点**：在右侧输入起点和终点坐标
         2. **添加障碍物**：
-           - **多边形/矩形**：在地图上点击 🔵 按钮绘制多边形
-           - **旋转矩形**：在右侧控制面板设置参数添加
-           - **圆形**：在地图上绘制圆形
+           - **地图绘制**：点击地图上的 🔵 按钮，画出多边形/矩形/圆形，然后点击"确认添加"
+           - **参数设置**：在右侧直接输入坐标和尺寸添加旋转矩形
         3. **规划路径**：点击"规划避障路径"
         
         ### 🚫 避障规则：
@@ -527,7 +512,6 @@ if page == "🗺️ 航线规划":
                 ).add_to(m)
                 
             elif obs.type == "rectangle":
-                # 旋转矩形显示
                 folium.Polygon(
                     locations=obs.points,
                     popup=f"{obs.name}<br>高度:{obs.height}m<br>旋转:{obs.rotation}°",
@@ -576,29 +560,39 @@ if page == "🗺️ 航线规划":
         map_data = st_folium(m, width=800, height=600, key="main_map")
         
         # 处理绘制数据
-        if map_data['all_drawings']:
-            st.session_state.map_draw_data = map_data['all_drawings']
-            
-            last_drawing = map_data['all_drawings'][-1]
-            
-            if last_drawing['type'] == 'polygon':
-                coords = last_drawing['geometry']['coordinates'][0]
-                points = [(coord[1], coord[0]) for coord in coords[:-1]]
-                st.session_state.temp_obstacle_points = points
-                st.info(f"📐 已绘制多边形，{len(points)}个顶点，请在右侧设置高度并添加")
+        if map_data and map_data.get('all_drawings'):
+            drawings = map_data['all_drawings']
+            if drawings:
+                last_drawing = drawings[-1]
                 
-            elif last_drawing['type'] == 'rectangle':
-                coords = last_drawing['geometry']['coordinates'][0]
-                points = [(coord[1], coord[0]) for coord in coords[:-1]]
-                st.session_state.temp_obstacle_points = points
-                st.info(f"📐 已绘制矩形，请在右侧设置高度并添加")
-                
-            elif last_drawing['type'] == 'circle':
-                center = last_drawing['geometry']['coordinates']
-                radius = last_drawing['properties']['radius']
-                st.session_state.temp_obstacle_points = [(center[1], center[0])]
-                st.session_state.temp_circle_radius = radius
-                st.info(f"⭕ 已绘制圆形，半径{radius:.1f}m，请在右侧设置高度并添加")
+                # 检查是否是新绘制的
+                drawing_id = f"{last_drawing['type']}_{len(drawings)}"
+                if st.session_state.get('last_processed_drawing') != drawing_id:
+                    st.session_state['last_processed_drawing'] = drawing_id
+                    
+                    if last_drawing['type'] == 'polygon':
+                        coords = last_drawing['geometry']['coordinates'][0]
+                        points = [(coord[1], coord[0]) for coord in coords[:-1]]
+                        st.session_state.temp_obstacle_points = points
+                        st.session_state.temp_obstacle_type = 'polygon'
+                        st.session_state.temp_circle_radius = 0
+                        st.rerun()
+                        
+                    elif last_drawing['type'] == 'rectangle':
+                        coords = last_drawing['geometry']['coordinates'][0]
+                        points = [(coord[1], coord[0]) for coord in coords[:-1]]
+                        st.session_state.temp_obstacle_points = points
+                        st.session_state.temp_obstacle_type = 'rectangle'
+                        st.session_state.temp_circle_radius = 0
+                        st.rerun()
+                        
+                    elif last_drawing['type'] == 'circle':
+                        center = last_drawing['geometry']['coordinates']
+                        radius = last_drawing['properties']['radius']
+                        st.session_state.temp_obstacle_points = [(center[1], center[0])]
+                        st.session_state.temp_obstacle_type = 'circle'
+                        st.session_state.temp_circle_radius = radius
+                        st.rerun()
     
     with col_ctrl:
         st.subheader("⚙️ 控制面板")
@@ -649,52 +643,70 @@ if page == "🗺️ 航线规划":
         
         st.markdown("---")
         
-        # 障碍物设置
-        st.markdown("**🚧 障碍物设置**")
+        # 障碍物设置 - 统一界面
+        st.markdown("**🚧 障碍物管理**")
         
-        # 显示当前绘制的图形
+        # 显示当前绘制的图形（如果有）
         if st.session_state.temp_obstacle_points:
-            shape_type = "圆形" if len(st.session_state.temp_obstacle_points) == 1 else f"多边形({len(st.session_state.temp_obstacle_points)}顶点)"
-            st.success(f"📐 已绘制: {shape_type}")
+            obs_type = st.session_state.temp_obstacle_type
+            if obs_type == 'circle':
+                st.success(f"⭕ 已绘制圆形，半径{st.session_state.temp_circle_radius:.1f}m")
+            elif obs_type == 'rectangle':
+                st.success(f"📐 已绘制矩形（{len(st.session_state.temp_obstacle_points)}顶点）")
+            else:
+                st.success(f"📐 已绘制多边形（{len(st.session_state.temp_obstacle_points)}顶点）")
             
+            # 高度设置
             obs_height = st.number_input("障碍物高度(m)", 5, 200, 40, key="obs_h")
             
-            c5, c6 = st.columns(2)
-            with c5:
-                if st.button("➕ 添加障碍物", key="add_obs"):
-                    if len(st.session_state.temp_obstacle_points) == 1:
-                        # 圆形
+            col_add, col_cancel = st.columns(2)
+            with col_add:
+                if st.button("✅ 确认添加", key="add_obs", type="primary"):
+                    if obs_type == 'circle':
                         center = st.session_state.temp_obstacle_points[0]
-                        radius = getattr(st.session_state, 'temp_circle_radius', 30)
+                        radius = st.session_state.temp_circle_radius
                         st.session_state.path_planner.add_circle_obstacle(
                             center[0], center[1], radius, obs_height,
                             f"圆形障碍({obs_height}m)"
                         )
-                    else:
-                        # 多边形
+                    elif obs_type == 'rectangle':
+                        # 地图绘制的矩形转为多边形
+                        st.session_state.path_planner.add_polygon_obstacle(
+                            st.session_state.temp_obstacle_points, obs_height,
+                            f"矩形障碍({obs_height}m)"
+                        )
+                    else:  # polygon
                         st.session_state.path_planner.add_polygon_obstacle(
                             st.session_state.temp_obstacle_points, obs_height,
                             f"多边形障碍({obs_height}m)"
                         )
                     
+                    # 清空临时数据
                     st.session_state.temp_obstacle_points = []
-                    if hasattr(st.session_state, 'temp_circle_radius'):
-                        delattr(st.session_state, 'temp_circle_radius')
-                    
+                    st.session_state.temp_obstacle_type = None
+                    st.session_state.temp_circle_radius = 30
                     st.success("✅ 障碍物已添加！")
                     st.rerun()
             
-            with c6:
-                if st.button("❌ 取消绘制", key="cancel_obs"):
+            with col_cancel:
+                if st.button("❌ 取消", key="cancel_obs"):
                     st.session_state.temp_obstacle_points = []
+                    st.session_state.temp_obstacle_type = None
+                    st.session_state.temp_circle_radius = 30
                     st.rerun()
+            
+            st.markdown("---")
         
-        # 旋转矩形设置（新增功能）
-        with st.expander("⬜ 添加旋转矩形障碍物"):
+        # 旋转矩形快速添加（参数方式）
+        with st.expander("⬜ 快速添加旋转矩形"):
             st.markdown("**设置矩形参数：**")
             
-            rect_lat = st.number_input("中心纬度", value=st.session_state.map_center[0], format="%.6f", key="rect_lat")
-            rect_lon = st.number_input("中心经度", value=st.session_state.map_center[1], format="%.6f", key="rect_lon")
+            # 使用地图中心或A点作为默认值
+            default_lat = st.session_state.point_a[0] if st.session_state.point_a else st.session_state.map_center[0]
+            default_lon = st.session_state.point_a[1] if st.session_state.point_a else st.session_state.map_center[1]
+            
+            rect_lat = st.number_input("中心纬度", value=default_lat, format="%.6f", key="rect_lat")
+            rect_lon = st.number_input("中心经度", value=default_lon, format="%.6f", key="rect_lon")
             rect_width = st.slider("宽度(米)", 10, 200, 50, key="rect_w")
             rect_height = st.slider("长度(米)", 10, 200, 80, key="rect_h")
             rect_rotation = st.slider("旋转角度(度)", 0, 360, 0, key="rect_rot")
@@ -715,7 +727,7 @@ if page == "🗺️ 航线规划":
                 for i, obs in enumerate(st.session_state.path_planner.obstacles):
                     need_detour = "🔴" if obs.height >= st.session_state.flight_altitude else "🟢"
                     type_icon = "⬜" if obs.type == "rectangle" else "⭕" if obs.type == "circle" else "📐"
-                    rot_info = f"↻{obs.rotation}°" if obs.type == "rectangle" else ""
+                    rot_info = f"↻{obs.rotation}°" if obs.type == "rectangle" and obs.rotation != 0 else ""
                     st.write(f"{need_detour} {type_icon} #{i+1}: {obs.name} {rot_info}")
                 
                 if st.button("🗑️ 清除全部障碍物", key="clear_all_obs"):
