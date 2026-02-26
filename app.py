@@ -44,9 +44,43 @@ def gcj02_to_wgs84(lng, lat):
     mglng = lng + dlng
     return lng * 2 - mglng, lat * 2 - mglat
 
+def wgs84_to_gcj02(lng, lat):
+    """WGS-84转GCJ-02"""
+    def transformlat(lng, lat):
+        ret = -100.0 + 2.0 * lng + 3.0 * lat + 0.2 * lat * lat + 0.1 * lng * lat + 0.2 * math.sqrt(abs(lng))
+        ret += (20.0 * math.sin(6.0 * lng * math.pi) + 20.0 * math.sin(2.0 * lng * math.pi)) * 2.0 / 3.0
+        ret += (20.0 * math.sin(lat * math.pi) + 40.0 * math.sin(lat / 3.0 * math.pi)) * 2.0 / 3.0
+        ret += (160.0 * math.sin(lat / 12.0 * math.pi) + 320 * math.sin(lat * math.pi / 30.0)) * 2.0 / 3.0
+        return ret
+
+    def transformlng(lng, lat):
+        ret = 300.0 + lng + 2.0 * lat + 0.1 * lng * lng + 0.1 * lng * lat + 0.1 * math.sqrt(abs(lng))
+        ret += (20.0 * math.sin(6.0 * lng * math.pi) + 20.0 * math.sin(2.0 * lng * math.pi)) * 2.0 / 3.0
+        ret += (20.0 * math.sin(lng * math.pi) + 40.0 * math.sin(lng / 3.0 * math.pi)) * 2.0 / 3.0
+        ret += (150.0 * math.sin(lng / 12.0 * math.pi) + 300.0 * math.sin(lng / 30.0 * math.pi)) * 2.0 / 3.0
+        return ret
+
+    def out_of_china(lng, lat):
+        return not (lng > 73.66 and lng < 135.05 and lat > 3.86 and lat < 53.55)
+
+    if out_of_china(lng, lat):
+        return lng, lat
+    
+    dlat = transformlat(lng - 105.0, lat - 35.0)
+    dlng = transformlng(lng - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * math.pi
+    magic = math.sin(radlat)
+    magic = 1 - 0.00669342162296594323 * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((6378245.0 * (1 - 0.00669342162296594323)) / (magic * sqrtmagic) * math.pi)
+    dlng = (dlng * 180.0) / (6378245.0 / sqrtmagic * math.cos(radlat) * math.pi)
+    mglat = lat + dlat
+    mglng = lng + dlng
+    return mglng, mglat
+
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="MAVLink 地面站 - 避障规划系统",
+    page_title="MAVLink 地面站 - 多边形避障规划系统",
     page_icon="🚁",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -57,10 +91,7 @@ def get_local_time():
 
 # ==================== 几何工具函数（替代shapely）====================
 def point_in_polygon(lat, lon, polygon_points):
-    """
-    射线法判断点是否在多边形内
-    polygon_points: [(lat1,lon1), (lat2,lon2), ...]
-    """
+    """射线法判断点是否在多边形内"""
     n = len(polygon_points)
     if n < 3:
         return False
@@ -68,7 +99,7 @@ def point_in_polygon(lat, lon, polygon_points):
     inside = False
     j = n - 1
     for i in range(n):
-        yi, xi = polygon_points[i][0], polygon_points[i][1]  # lat, lon
+        yi, xi = polygon_points[i][0], polygon_points[i][1]
         yj, xj = polygon_points[j][0], polygon_points[j][1]
         
         if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi):
@@ -107,22 +138,17 @@ def rotate_point(cx, cy, x, y, angle_deg):
     return cx + new_dx, cy + new_dy
 
 def create_rotated_rectangle(center_lat, center_lon, width_m, height_m, rotation_deg):
-    """
-    创建旋转矩形，返回4个角点 [(lat,lon), ...]
-    """
-    # 米转经纬度
+    """创建旋转矩形，返回4个角点 [(lat,lon), ...]"""
     lat_offset = (height_m / 2) / 111000
     lon_offset = (width_m / 2) / (111000 * math.cos(math.radians(center_lat)))
     
-    # 原始矩形的4个角
     corners = [
-        (center_lat + lat_offset, center_lon + lon_offset),  # 东北
-        (center_lat + lat_offset, center_lon - lon_offset),  # 西北
-        (center_lat - lat_offset, center_lon - lon_offset),  # 西南
-        (center_lat - lat_offset, center_lon + lon_offset),  # 东南
+        (center_lat + lat_offset, center_lon + lon_offset),
+        (center_lat + lat_offset, center_lon - lon_offset),
+        (center_lat - lat_offset, center_lon - lon_offset),
+        (center_lat - lat_offset, center_lon + lon_offset),
     ]
     
-    # 旋转每个角点
     rotated_corners = []
     for lat, lon in corners:
         new_lat, new_lon = rotate_point(center_lat, center_lon, lat, lon, rotation_deg)
@@ -150,7 +176,6 @@ class Obstacle:
         self.width = width
         self.height_m = height_m
         
-        # 计算中心点和边界
         if obs_type == "polygon" and len(self.points) > 0:
             self.center_lat = sum(p[0] for p in self.points) / len(self.points)
             self.center_lon = sum(p[1] for p in self.points) / len(self.points)
@@ -162,10 +187,10 @@ class Obstacle:
             self.center_lat = sum(p[0] for p in self.points) / len(self.points)
             self.center_lon = sum(p[1] for p in self.points) / len(self.points)
             self.radius = math.sqrt((width/2)**2 + (height_m/2)**2)
-        else:  # circle
+        else:
             self.center_lat = self.points[0][0]
             self.center_lon = self.points[0][1]
-            self.radius = 30  # 默认半径
+            self.radius = 30
     
     def contains_point(self, lat, lon):
         """判断点是否在障碍物内"""
@@ -235,12 +260,10 @@ class PathPlanner:
     def check_collision(self, lat, lon, alt):
         """检查是否与任何障碍物碰撞"""
         for obs in self.obstacles:
-            if alt < obs.height:  # 高度低于障碍物顶部
+            if alt < obs.height:
                 if obs.type in ["polygon", "rectangle"]:
-                    # 检查点是否在多边形内
                     if obs.contains_point(lat, lon):
                         return True, obs
-                    # 检查点是否在多边形边界附近（安全边距）
                     n = len(obs.points)
                     for i in range(n):
                         p1 = obs.points[i]
@@ -248,14 +271,14 @@ class PathPlanner:
                         dist = point_to_segment_distance(lat, lon, p1[0], p1[1], p2[0], p2[1])
                         if dist < self.safety_margin:
                             return True, obs
-                else:  # circle
+                else:
                     dist = self.haversine_distance(lat, lon, obs.center_lat, obs.center_lon)
                     if dist < (obs.radius + self.safety_margin):
                         return True, obs
         return False, None
     
     def get_neighbors(self, node, end_node, step_size=20):
-        """获取邻居节点 - 修复浮点数range问题"""
+        """获取邻居节点"""
         neighbors = []
         
         dlat = end_node.lat - node.lat
@@ -266,10 +289,9 @@ class PathPlanner:
             dlat_norm = dlat / dist
             dlon_norm = dlon / dist
             
-            # 16个方向 - 使用整数range
             directions = []
-            for i in range(16):  # 0到15，共16个方向
-                angle = i * 22.5  # 每22.5度一个方向
+            for i in range(16):
+                angle = i * 22.5
                 rad = math.radians(angle)
                 directions.append((
                     dlat_norm * math.cos(rad) - dlon_norm * math.sin(rad),
@@ -377,10 +399,10 @@ def init_session_state():
         'coord_system': 'WGS-84',
         'map_draw_data': None,
         'temp_obstacle_points': [],
-        'temp_obstacle_type': None,  # 'polygon', 'circle', 'rectangle'
+        'temp_obstacle_type': None,
         'temp_circle_radius': 30,
         'obstacle_height_input': 40,
-        # 旋转矩形参数
+        'pending_drawing': None,  # 存储待处理的绘制数据
         'rect_width': 50,
         'rect_height': 80,
         'rect_rotation': 0,
@@ -427,7 +449,7 @@ if page == "🗺️ 航线规划":
         st.markdown("""
         ### 🎯 操作步骤：
         
-        1. **设置A/B点**：在右侧输入起点和终点坐标
+        1. **设置A/B点**：在右侧输入起点和终点坐标（注意选择正确的坐标系）
         2. **添加障碍物**：
            - **地图绘制**：点击地图上的 🔵 按钮，画出多边形/矩形/圆形，然后点击"确认添加"
            - **参数设置**：在右侧直接输入坐标和尺寸添加旋转矩形
@@ -436,6 +458,10 @@ if page == "🗺️ 航线规划":
         ### 🚫 避障规则：
         - 障碍物高度 ≥ 飞行高度：**强制水平绕行**
         - 障碍物高度 < 飞行高度：**可以飞越**
+        
+        ### ⚠️ 坐标系说明：
+        - **地图绘制**：自动使用WGS-84坐标
+        - **手动输入**：根据右侧选择的坐标系自动转换
         """)
     
     col_map, col_ctrl = st.columns([3, 2])
@@ -521,7 +547,6 @@ if page == "🗺️ 航线规划":
                     fillOpacity=0.4,
                     weight=2
                 ).add_to(m)
-                # 添加旋转指示线
                 folium.PolyLine(
                     [[obs.center_lat, obs.center_lon], obs.points[0]],
                     color=color,
@@ -559,74 +584,113 @@ if page == "🗺️ 航线规划":
         # 显示地图并获取绘制数据
         map_data = st_folium(m, width=800, height=600, key="main_map")
         
-        # 处理绘制数据
-        if map_data and map_data.get('all_drawings'):
-            drawings = map_data['all_drawings']
-            if drawings:
-                last_drawing = drawings[-1]
+        # 处理地图绘制数据 - 使用更简单直接的方式
+        if map_data:
+            # 检查是否有新的绘制数据
+            if map_data.get('last_active_drawing'):
+                drawing = map_data['last_active_drawing']
                 
-                # 检查是否是新绘制的
-                drawing_id = f"{last_drawing['type']}_{len(drawings)}"
-                if st.session_state.get('last_processed_drawing') != drawing_id:
-                    st.session_state['last_processed_drawing'] = drawing_id
+                # 检查是否是新绘制（通过类型和坐标判断）
+                drawing_signature = f"{drawing.get('type')}_{str(drawing.get('geometry', {}).get('coordinates', []))[:50]}"
+                
+                if st.session_state.get('last_drawing_signature') != drawing_signature:
+                    st.session_state['last_drawing_signature'] = drawing_signature
                     
-                    if last_drawing['type'] == 'polygon':
-                        coords = last_drawing['geometry']['coordinates'][0]
-                        points = [(coord[1], coord[0]) for coord in coords[:-1]]
-                        st.session_state.temp_obstacle_points = points
-                        st.session_state.temp_obstacle_type = 'polygon'
-                        st.session_state.temp_circle_radius = 0
+                    geom_type = drawing.get('type')
+                    
+                    if geom_type == 'polygon':
+                        coords = drawing['geometry']['coordinates'][0]
+                        # Folium返回的是[lon, lat]，需要转换为[lat, lon]
+                        points = [(coord[1], coord[0]) for coord in coords[:-1]]  # 去掉重复的最后一个点
+                        st.session_state.pending_drawing = {
+                            'type': 'polygon',
+                            'points': points
+                        }
                         st.rerun()
                         
-                    elif last_drawing['type'] == 'rectangle':
-                        coords = last_drawing['geometry']['coordinates'][0]
+                    elif geom_type == 'rectangle':
+                        coords = drawing['geometry']['coordinates'][0]
                         points = [(coord[1], coord[0]) for coord in coords[:-1]]
-                        st.session_state.temp_obstacle_points = points
-                        st.session_state.temp_obstacle_type = 'rectangle'
-                        st.session_state.temp_circle_radius = 0
+                        st.session_state.pending_drawing = {
+                            'type': 'rectangle',
+                            'points': points
+                        }
                         st.rerun()
                         
-                    elif last_drawing['type'] == 'circle':
-                        center = last_drawing['geometry']['coordinates']
-                        radius = last_drawing['properties']['radius']
-                        st.session_state.temp_obstacle_points = [(center[1], center[0])]
-                        st.session_state.temp_obstacle_type = 'circle'
-                        st.session_state.temp_circle_radius = radius
+                    elif geom_type == 'circle':
+                        center = drawing['geometry']['coordinates']
+                        radius = drawing['properties']['radius']
+                        # center是[lon, lat]，转换为[lat, lon]
+                        st.session_state.pending_drawing = {
+                            'type': 'circle',
+                            'center': (center[1], center[0]),
+                            'radius': radius
+                        }
                         st.rerun()
     
     with col_ctrl:
         st.subheader("⚙️ 控制面板")
         
-        # A点设置
+        # A点设置 - 根据坐标系自动转换
         st.markdown("**🟢 起点 A**")
+        st.caption(f"输入坐标系: {st.session_state.coord_system}")
         c1, c2 = st.columns(2)
-        lat_a = c1.number_input("纬度", value=32.0603, format="%.6f", key="lat_a")
-        lon_a = c2.number_input("经度", value=118.7969, format="%.6f", key="lon_a")
+        
+        # 如果有WGS坐标，转换为当前坐标系显示
+        default_lat_a = 32.0603
+        default_lon_a = 118.7969
+        if st.session_state.point_a:
+            if st.session_state.coord_system == 'GCJ-02':
+                # WGS转GCJ显示
+                lon_gcj, lat_gcj = wgs84_to_gcj02(st.session_state.point_a[1], st.session_state.point_a[0])
+                default_lat_a = lat_gcj
+                default_lon_a = lon_gcj
+            else:
+                default_lat_a = st.session_state.point_a[0]
+                default_lon_a = st.session_state.point_a[1]
+        
+        lat_a = c1.number_input("纬度", value=default_lat_a, format="%.6f", key="lat_a")
+        lon_a = c2.number_input("经度", value=default_lon_a, format="%.6f", key="lon_a")
         
         if st.button("✅ 设置A点", key="set_a"):
-            st.session_state.point_a_gcj = (lat_a, lon_a)
             if st.session_state.coord_system == 'GCJ-02':
+                # GCJ转WGS存储
                 lon_wgs, lat_wgs = gcj02_to_wgs84(lon_a, lat_a)
                 st.session_state.point_a = (lat_wgs, lon_wgs)
+                st.session_state.point_a_gcj = (lat_a, lon_a)
             else:
                 st.session_state.point_a = (lat_a, lon_a)
-            st.success(f"A点已设置")
+                st.session_state.point_a_gcj = None
+            st.success(f"A点已设置 ({st.session_state.coord_system})")
             st.rerun()
         
         # B点设置
         st.markdown("**🔴 终点 B**")
         c3, c4 = st.columns(2)
-        lat_b = c3.number_input("纬度", value=32.0703, format="%.6f", key="lat_b")
-        lon_b = c4.number_input("经度", value=118.8069, format="%.6f", key="lon_b")
+        
+        default_lat_b = 32.0703
+        default_lon_b = 118.8069
+        if st.session_state.point_b:
+            if st.session_state.coord_system == 'GCJ-02':
+                lon_gcj, lat_gcj = wgs84_to_gcj02(st.session_state.point_b[1], st.session_state.point_b[0])
+                default_lat_b = lat_gcj
+                default_lon_b = lon_gcj
+            else:
+                default_lat_b = st.session_state.point_b[0]
+                default_lon_b = st.session_state.point_b[1]
+        
+        lat_b = c3.number_input("纬度", value=default_lat_b, format="%.6f", key="lat_b")
+        lon_b = c4.number_input("经度", value=default_lon_b, format="%.6f", key="lon_b")
         
         if st.button("✅ 设置B点", key="set_b"):
-            st.session_state.point_b_gcj = (lat_b, lon_b)
             if st.session_state.coord_system == 'GCJ-02':
                 lon_wgs, lat_wgs = gcj02_to_wgs84(lon_b, lat_b)
                 st.session_state.point_b = (lat_wgs, lon_wgs)
+                st.session_state.point_b_gcj = (lat_b, lon_b)
             else:
                 st.session_state.point_b = (lat_b, lon_b)
-            st.success(f"B点已设置")
+                st.session_state.point_b_gcj = None
+            st.success(f"B点已设置 ({st.session_state.coord_system})")
             st.rerun()
         
         st.markdown("---")
@@ -643,67 +707,65 @@ if page == "🗺️ 航线规划":
         
         st.markdown("---")
         
-        # 障碍物设置 - 统一界面
+        # 障碍物设置
         st.markdown("**🚧 障碍物管理**")
         
-        # 显示当前绘制的图形（如果有）
-        if st.session_state.temp_obstacle_points:
-            obs_type = st.session_state.temp_obstacle_type
-            if obs_type == 'circle':
-                st.success(f"⭕ 已绘制圆形，半径{st.session_state.temp_circle_radius:.1f}m")
-            elif obs_type == 'rectangle':
-                st.success(f"📐 已绘制矩形（{len(st.session_state.temp_obstacle_points)}顶点）")
-            else:
-                st.success(f"📐 已绘制多边形（{len(st.session_state.temp_obstacle_points)}顶点）")
+        # 显示待确认的地图绘制
+        if st.session_state.pending_drawing:
+            drawing = st.session_state.pending_drawing
+            obs_type = drawing['type']
             
-            # 高度设置
+            if obs_type == 'circle':
+                st.success(f"⭕ 地图绘制：圆形障碍")
+                st.write(f"- 中心: ({drawing['center'][0]:.6f}, {drawing['center'][1]:.6f})")
+                st.write(f"- 半径: {drawing['radius']:.1f}m")
+            else:
+                st.success(f"📐 地图绘制：{obs_type} ({len(drawing['points'])}顶点)")
+                # 显示第一个点作为参考
+                st.write(f"- 第一个顶点: ({drawing['points'][0][0]:.6f}, {drawing['points'][0][1]:.6f})")
+            
             obs_height = st.number_input("障碍物高度(m)", 5, 200, 40, key="obs_h")
             
             col_add, col_cancel = st.columns(2)
             with col_add:
                 if st.button("✅ 确认添加", key="add_obs", type="primary"):
                     if obs_type == 'circle':
-                        center = st.session_state.temp_obstacle_points[0]
-                        radius = st.session_state.temp_circle_radius
+                        center = drawing['center']
                         st.session_state.path_planner.add_circle_obstacle(
-                            center[0], center[1], radius, obs_height,
+                            center[0], center[1], drawing['radius'], obs_height,
                             f"圆形障碍({obs_height}m)"
                         )
-                    elif obs_type == 'rectangle':
-                        # 地图绘制的矩形转为多边形
+                    else:
                         st.session_state.path_planner.add_polygon_obstacle(
-                            st.session_state.temp_obstacle_points, obs_height,
-                            f"矩形障碍({obs_height}m)"
-                        )
-                    else:  # polygon
-                        st.session_state.path_planner.add_polygon_obstacle(
-                            st.session_state.temp_obstacle_points, obs_height,
-                            f"多边形障碍({obs_height}m)"
+                            drawing['points'], obs_height,
+                            f"{obs_type}障碍({obs_height}m)"
                         )
                     
-                    # 清空临时数据
-                    st.session_state.temp_obstacle_points = []
-                    st.session_state.temp_obstacle_type = None
-                    st.session_state.temp_circle_radius = 30
+                    st.session_state.pending_drawing = None
                     st.success("✅ 障碍物已添加！")
                     st.rerun()
             
             with col_cancel:
                 if st.button("❌ 取消", key="cancel_obs"):
-                    st.session_state.temp_obstacle_points = []
-                    st.session_state.temp_obstacle_type = None
-                    st.session_state.temp_circle_radius = 30
+                    st.session_state.pending_drawing = None
                     st.rerun()
             
             st.markdown("---")
         
-        # 旋转矩形快速添加（参数方式）
+        # 旋转矩形快速添加（参数方式）- 同样处理坐标系
         with st.expander("⬜ 快速添加旋转矩形"):
             st.markdown("**设置矩形参数：**")
             
-            # 使用地图中心或A点作为默认值
-            default_lat = st.session_state.point_a[0] if st.session_state.point_a else st.session_state.map_center[0]
-            default_lon = st.session_state.point_a[1] if st.session_state.point_a else st.session_state.map_center[1]
+            # 使用地图中心或A点作为默认值，并考虑坐标系
+            default_lat = st.session_state.map_center[0]
+            default_lon = st.session_state.map_center[1]
+            if st.session_state.point_a:
+                if st.session_state.coord_system == 'GCJ-02' and st.session_state.point_a_gcj:
+                    default_lat = st.session_state.point_a_gcj[0]
+                    default_lon = st.session_state.point_a_gcj[1]
+                else:
+                    default_lat = st.session_state.point_a[0]
+                    default_lon = st.session_state.point_a[1]
             
             rect_lat = st.number_input("中心纬度", value=default_lat, format="%.6f", key="rect_lat")
             rect_lon = st.number_input("中心经度", value=default_lon, format="%.6f", key="rect_lon")
@@ -713,8 +775,14 @@ if page == "🗺️ 航线规划":
             rect_obs_height = st.number_input("矩形障碍物高度(m)", 5, 200, 40, key="rect_obs_h")
             
             if st.button("➕ 添加旋转矩形", key="add_rect"):
+                # 坐标系转换
+                if st.session_state.coord_system == 'GCJ-02':
+                    lon_wgs, lat_wgs = gcj02_to_wgs84(rect_lon, rect_lat)
+                else:
+                    lat_wgs, lon_wgs = rect_lat, rect_lon
+                
                 st.session_state.path_planner.add_rotated_rectangle_obstacle(
-                    rect_lat, rect_lon, rect_width, rect_height, 
+                    lat_wgs, lon_wgs, rect_width, rect_height, 
                     rect_rotation, rect_obs_height,
                     f"矩形障碍({rect_obs_height}m)"
                 )
@@ -818,7 +886,6 @@ elif page == "🛰️ 飞行监控":
                 st.progress(prog)
                 st.write(f"航点: {curr+1}/{total} ({prog}%)")
             
-            # 地图
             center = st.session_state.drone_position if st.session_state.drone_position else st.session_state.map_center
             m = folium.Map(location=center, zoom_start=17, tiles="CartoDB dark_matter")
             
@@ -835,7 +902,6 @@ elif page == "🛰️ 飞行监控":
             
             st_folium(m, width=800, height=500)
             
-            # 动画
             if st.session_state.mission_executing and st.session_state.drone_position:
                 if curr < total - 1:
                     curr_wp = st.session_state.waypoints[curr]
