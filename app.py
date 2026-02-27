@@ -770,13 +770,15 @@ if page == "🗺️ 航线规划":
             all_drawings = map_data.get("all_drawings") or []
             last_drawing = map_data.get("last_active_drawing")
             
-            # 使用绘制数量来判断是否有新绘制
-            prev_count = st.session_state.get("drawings_count", 0)
-            curr_count = len(all_drawings) if isinstance(all_drawings, list) else 0
+            # 调试信息（可在浏览器控制台查看）
+            st.session_state["debug_map_data"] = {
+                "has_last_drawing": last_drawing is not None,
+                "drawings_count": len(all_drawings) if isinstance(all_drawings, list) else 0,
+                "pending_drawing": st.session_state.pending_drawing is not None
+            }
             
-            # 如果有新的绘制且没有待确认的障碍物
-            if curr_count > prev_count and last_drawing and not st.session_state.pending_drawing:
-                st.session_state["drawings_count"] = curr_count
+            # 直接使用 last_active_drawing，不依赖计数
+            if last_drawing and not st.session_state.pending_drawing:
                 geom_type = last_drawing.get("type")
                 
                 try:
@@ -789,7 +791,7 @@ if page == "🗺️ 航线规划":
                             'radius': radius
                         }
                         st.rerun()
-                    elif geom_type in ["polygon", "rectangle"]:
+                    elif geom_type in ["Polygon", "polygon", "rectangle", "Rectangle"]:
                         coords = last_drawing["geometry"]["coordinates"][0]
                         points = [(c[1], c[0]) for c in coords[:-1]]
                         st.session_state.pending_drawing = {
@@ -799,9 +801,6 @@ if page == "🗺️ 航线规划":
                         st.rerun()
                 except Exception as e:
                     st.error(f"处理地图绘制失败: {e}")
-            elif curr_count != prev_count:
-                # 同步计数（删除操作时）
-                st.session_state["drawings_count"] = curr_count
     
     with col_ctrl:
         st.subheader("⚙️ 控制面板")
@@ -884,6 +883,15 @@ if page == "🗺️ 航线规划":
         # 障碍物管理
         st.markdown("**🧱 障碍物管理**")
         
+        # 调试信息显示
+        with st.expander("🔧 调试信息", expanded=False):
+            debug_info = st.session_state.get("debug_map_data", {})
+            st.write("地图数据:", debug_info)
+            st.write("pending_drawing:", st.session_state.pending_drawing)
+            st.write("障碍物数量:", len(st.session_state.planner.obstacles))
+            st.write("A点:", st.session_state.point_a)
+            st.write("B点:", st.session_state.point_b)
+        
         # ====== 优先处理地图圈选的待确认障碍物 ======
         if st.session_state.pending_drawing:
             drawing = st.session_state.pending_drawing
@@ -901,12 +909,12 @@ if page == "🗺️ 航线规划":
                 "🗺️ 地图障碍物高度(m)", 
                 min_value=5, max_value=300, 
                 value=max(st.session_state.flight_altitude + 10, 50), 
-                key="map_obs_height"
+                key="map_obs_height_unique"
             )
             
             col_add, col_cancel = st.columns(2)
             with col_add:
-                if st.button("✅ 确认添加", type="primary", key="confirm_map_obs"):
+                if st.button("✅ 确认添加", type="primary", key="confirm_map_obs_btn"):
                     if drawing['type'] == 'circle':
                         lat, lon = drawing['center']
                         st.session_state.planner.add_circle_obstacle(
@@ -921,17 +929,20 @@ if page == "🗺️ 航线规划":
                     st.rerun()
             
             with col_cancel:
-                if st.button("❌ 取消", key="cancel_map_obs"):
+                if st.button("❌ 取消", key="cancel_map_obs_btn"):
                     st.session_state.pending_drawing = None
                     st.rerun()
             
             st.markdown("---")
+        elif st.session_state.get("debug_map_data", {}).get("has_last_drawing"):
+            # 有绘制但 pending_drawing 为空，显示提示
+            st.info("💡 检测到地图绘制，请点击地图上的图形使其成为「当前选中」状态")
         
         # 方式1: 在地图上圈选
-        st.info("💡 **方式1**: 直接在左侧地图上用 🔲矩形/⭕圆形/📐多边形 工具圈选障碍物区域")
+        st.info("💡 **方式1**: 在左侧地图上用 🔲矩形/⭕圆形/📐多边形 工具圈选，选中图形后右侧会显示确认按钮")
         
         # 方式2: 手动输入坐标添加
-        with st.expander("➕ 方式2: 手动输入坐标添加障碍物"):
+        with st.expander("➕ 方式2: 手动输入坐标添加障碍物", expanded=True):
             st.caption(f"输入坐标系: {st.session_state.coord_system} (将自动转换为WGS-84)")
             
             obs_type = st.selectbox("障碍物类型", ["矩形", "圆形", "多边形"], key="manual_obs_type")
@@ -967,7 +978,7 @@ if page == "🗺️ 航线规划":
                 rect_h = st.slider("长度(m)", 10, 500, 80, key="manual_h")
                 rect_rot = st.slider("旋转角度(°)", 0, 360, 0, key="manual_rot")
                 
-                if st.button("➕ 添加矩形障碍物", type="primary"):
+                if st.button("➕ 添加矩形障碍物", type="primary", key="btn_add_rect"):
                     # 坐标系转换
                     rect_lat_wgs, rect_lon_wgs = CoordinateConverter.from_user_input(
                         rect_lat_input, rect_lon_input, st.session_state.coord_system
@@ -986,7 +997,7 @@ if page == "🗺️ 航线规划":
                 circle_lon_input = c2.number_input("中心经度", value=default_lon, format="%.6f", key="circle_lon")
                 circle_r = st.slider("半径(m)", 10, 200, 30, key="manual_r")
                 
-                if st.button("➕ 添加圆形障碍物", type="primary"):
+                if st.button("➕ 添加圆形障碍物", type="primary", key="btn_add_circle"):
                     # 坐标系转换
                     circle_lat_wgs, circle_lon_wgs = CoordinateConverter.from_user_input(
                         circle_lat_input, circle_lon_input, st.session_state.coord_system
@@ -1008,7 +1019,7 @@ if page == "🗺️ 航线规划":
                     key="poly_input"
                 )
                 
-                if st.button("➕ 添加多边形障碍物", type="primary"):
+                if st.button("➕ 添加多边形障碍物", type="primary", key="btn_add_poly"):
                     try:
                         points_input = []
                         for line in poly_input.strip().split('\n'):
@@ -1053,10 +1064,20 @@ if page == "🗺️ 航线规划":
         
         # 路径规划
         can_plan = st.session_state.point_a and st.session_state.point_b
-        if not can_plan:
-            st.warning("⚠️ 请先设置A点和B点")
         
-        st.markdown("**🧭 路径规划**")
+        # 显示当前规划状态
+        plan_status = []
+        if st.session_state.point_a:
+            plan_status.append("✅ A点已设")
+        else:
+            plan_status.append("❌ A点未设")
+        if st.session_state.point_b:
+            plan_status.append("✅ B点已设")
+        else:
+            plan_status.append("❌ B点未设")
+        plan_status.append(f"障碍物: {len(st.session_state.planner.obstacles)}个")
+        
+        st.markdown(f"**🧭 路径规划** ({' | '.join(plan_status)})")
         
         force_avoidance = st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude)
         
