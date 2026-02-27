@@ -893,7 +893,9 @@ if page == "🗺️ 航线规划":
             st.write("障碍物数量:", len(st.session_state.planner.obstacles))
             st.write("A点:", st.session_state.point_a)
             st.write("B点:", st.session_state.point_b)
-            st.write("can_plan:", can_plan)
+            has_a = st.session_state.point_a is not None
+            has_b = st.session_state.point_b is not None
+            st.write("can_plan:", has_a and has_b)
         
         # ====== 优先处理地图圈选的待确认障碍物 ======
         if st.session_state.pending_drawing:
