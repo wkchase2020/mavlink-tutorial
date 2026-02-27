@@ -766,64 +766,44 @@ if page == "🗺️ 航线规划":
         
         map_data = st_folium(m, width=800, height=600, key="main_map")
         
-        # 详细调试：显示原始地图数据
+        # 处理地图绘制 - 简化逻辑
         if map_data:
-            # 保存完整数据用于调试
-            st.session_state["raw_map_data"] = map_data
-            
             last_drawing = map_data.get("last_active_drawing")
             
             # 调试信息
             st.session_state["debug_map"] = {
-                "keys": list(map_data.keys()) if map_data else [],
                 "has_last_drawing": last_drawing is not None,
                 "last_drawing_type": last_drawing.get("type") if last_drawing else None,
                 "pending_exists": st.session_state.pending_drawing is not None,
             }
             
-            # 使用绘图ID避免重复处理
-            if last_drawing:
-                # 生成唯一ID
-                drawing_id = None
-                try:
-                    if last_drawing.get("type") == "circle":
-                        coords = last_drawing["geometry"]["coordinates"]
-                        drawing_id = f"circle_{coords[0]:.6f}_{coords[1]:.6f}"
-                    else:
-                        coords = last_drawing["geometry"]["coordinates"][0][0]
-                        drawing_id = f"poly_{coords[0]:.6f}_{coords[1]:.6f}"
-                except:
-                    drawing_id = str(id(last_drawing))
+            # 只要有 last_drawing 且没有待处理的绘制，就处理
+            if last_drawing and st.session_state.pending_drawing is None:
+                geom_type = last_drawing.get("type")
                 
-                # 检查是否已处理过这个绘制
-                if drawing_id and drawing_id != st.session_state.get("last_processed_drawing"):
-                    if not st.session_state.pending_drawing:
-                        geom_type = last_drawing.get("type")
-                        
-                        try:
-                            if geom_type == "circle":
-                                center = last_drawing["geometry"]["coordinates"]
-                                radius = last_drawing.get("properties", {}).get("radius", 50)
-                                st.session_state.pending_drawing = {
-                                    'type': 'circle',
-                                    'center': (center[1], center[0]),
-                                    'radius': radius,
-                                    'drawing_id': drawing_id
-                                }
-                                st.session_state["last_processed_drawing"] = drawing_id
-                                st.rerun()
-                            elif geom_type in ["polygon", "rectangle"]:
-                                coords = last_drawing["geometry"]["coordinates"][0]
-                                points = [(c[1], c[0]) for c in coords[:-1]]
-                                st.session_state.pending_drawing = {
-                                    'type': 'polygon',
-                                    'points': points,
-                                    'drawing_id': drawing_id
-                                }
-                                st.session_state["last_processed_drawing"] = drawing_id
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"处理地图绘制失败: {e}")
+                try:
+                    if geom_type == "circle":
+                        center = last_drawing["geometry"]["coordinates"]
+                        radius = last_drawing.get("properties", {}).get("radius", 50)
+                        st.session_state.pending_drawing = {
+                            'type': 'circle',
+                            'center': (center[1], center[0]),
+                            'radius': radius
+                        }
+                        st.rerun()
+                    elif geom_type in ["polygon", "rectangle"]:
+                        coords = last_drawing["geometry"]["coordinates"][0]
+                        points = [(c[1], c[0]) for c in coords[:-1]]
+                        st.session_state.pending_drawing = {
+                            'type': 'polygon',
+                            'points': points
+                        }
+                        st.rerun()
+                    else:
+                        # 未知类型，显示调试信息
+                        st.session_state["debug_map"]["unknown_type"] = geom_type
+                except Exception as e:
+                    st.session_state["debug_map"]["error"] = str(e)
     
     with col_ctrl:
         st.subheader("⚙️ 控制面板")
@@ -913,7 +893,7 @@ if page == "🗺️ 航线规划":
             st.write("障碍物数量:", len(st.session_state.planner.obstacles))
             st.write("A点:", st.session_state.point_a)
             st.write("B点:", st.session_state.point_b)
-            st.write("last_processed:", st.session_state.get("last_processed_drawing"))
+            st.write("can_plan:", can_plan)
         
         # ====== 优先处理地图圈选的待确认障碍物 ======
         if st.session_state.pending_drawing:
@@ -1106,8 +1086,15 @@ if page == "🗺️ 航线规划":
         col_h, col_c = st.columns(2)
         
         with col_h:
-            btn_horizontal = st.button("🔄 水平绕行", disabled=not can_plan, use_container_width=True, type="primary", key="btn_h_v3")
+            # 显示按钮状态
+            if not can_plan:
+                st.caption("⚠️ 按钮已禁用：请先设置A点和B点")
+            
+            btn_horizontal = st.button("🔄 水平绕行", disabled=not can_plan, use_container_width=True, type="primary", key="btn_h_v4")
+            
             if btn_horizontal:
+                st.write("📝 按钮被点击，开始规划...")
+                
                 start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
                                    st.session_state.flight_altitude, 22)
                 end_wp = Waypoint(st.session_state.point_b[0], st.session_state.point_b[1], 
