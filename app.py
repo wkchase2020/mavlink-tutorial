@@ -236,7 +236,7 @@ class GridPathPlanner:
     """严格避障路径规划器 - 确保绝不穿行障碍物"""
     def __init__(self):
         self.obstacles = []
-        self.safety_margin = 50  # 增加安全边距到50米
+        self.safety_margin = 10  # 小型四旋翼默认安全边距10米
         self.grid_size = 5  # 减小网格到5米，提高精度
         self.max_iterations = 50000  # 增加最大迭代次数
     
@@ -627,6 +627,7 @@ with st.sidebar:
         st.error("❌ B点未设")
     
     st.metric("障碍物数量", len(st.session_state.planner.obstacles))
+    st.metric("安全半径", f"{st.session_state.planner.safety_margin}m")
     
     max_obs_h = st.session_state.planner.get_max_obstacle_height()
     if max_obs_h > 0:
@@ -876,6 +877,15 @@ if page == "🗺️ 航线规划":
                            st.session_state.max_altitude, key="max_alt")
         if max_alt != st.session_state.max_altitude:
             st.session_state.max_altitude = max_alt
+        
+        # 安全半径设置
+        st.markdown("---")
+        st.markdown("**🛡️ 安全设置**")
+        new_safety = st.slider("无人机安全半径(m)", 5, 20, st.session_state.planner.safety_margin, key="safety_margin")
+        if new_safety != st.session_state.planner.safety_margin:
+            st.session_state.planner.safety_margin = new_safety
+            st.success(f"✅ 安全半径已设置为 {new_safety} 米")
+            st.rerun()
         
         # 高度对比
         max_obs_h = st.session_state.planner.get_max_obstacle_height()
