@@ -593,6 +593,7 @@ def init_session_state():
         'animation_step': 0,
         'coord_system': 'WGS-84',
         'pending_drawing': None,
+        'drawings_count': 0,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -765,30 +766,42 @@ if page == "🗺️ 航线规划":
         map_data = st_folium(m, width=800, height=600, key="main_map")
         
         # 处理地图绘制
-        if map_data and map_data.get("last_active_drawing"):
-            drawing = map_data["last_active_drawing"]
-            shape_id = f"{drawing.get('type')}_{id(drawing)}"
+        if map_data:
+            all_drawings = map_data.get("all_drawings", [])
+            last_drawing = map_data.get("last_active_drawing")
             
-            if st.session_state.get("last_shape_id") != shape_id:
-                st.session_state["last_shape_id"] = shape_id
-                geom_type = drawing.get("type")
+            # 使用绘制数量来判断是否有新绘制
+            prev_count = st.session_state.get("drawings_count", 0)
+            curr_count = len(all_drawings)
+            
+            # 如果有新的绘制且没有待确认的障碍物
+            if curr_count > prev_count and last_drawing and not st.session_state.pending_drawing:
+                st.session_state["drawings_count"] = curr_count
+                geom_type = last_drawing.get("type")
                 
-                if geom_type == "circle":
-                    center = drawing["geometry"]["coordinates"]
-                    st.session_state.pending_drawing = {
-                        'type': 'circle',
-                        'center': (center[1], center[0]),
-                        'radius': drawing["properties"]["radius"]
-                    }
-                    st.rerun()
-                elif geom_type in ["polygon", "rectangle"]:
-                    coords = drawing["geometry"]["coordinates"][0]
-                    points = [(c[1], c[0]) for c in coords[:-1]]
-                    st.session_state.pending_drawing = {
-                        'type': 'polygon',
-                        'points': points
-                    }
-                    st.rerun()
+                try:
+                    if geom_type == "circle":
+                        center = last_drawing["geometry"]["coordinates"]
+                        radius = last_drawing.get("properties", {}).get("radius", 50)
+                        st.session_state.pending_drawing = {
+                            'type': 'circle',
+                            'center': (center[1], center[0]),
+                            'radius': radius
+                        }
+                        st.rerun()
+                    elif geom_type in ["polygon", "rectangle"]:
+                        coords = last_drawing["geometry"]["coordinates"][0]
+                        points = [(c[1], c[0]) for c in coords[:-1]]
+                        st.session_state.pending_drawing = {
+                            'type': 'polygon',
+                            'points': points
+                        }
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"处理地图绘制失败: {e}")
+            elif curr_count != prev_count:
+                # 同步计数（删除操作时）
+                st.session_state["drawings_count"] = curr_count
     
     with col_ctrl:
         st.subheader("⚙️ 控制面板")
@@ -1050,31 +1063,52 @@ if page == "🗺️ 航线规划":
         col_h, col_c = st.columns(2)
         
         with col_h:
+            # 调试信息
+            debug_info = []
+            if not st.session_state.point_a:
+                debug_info.append("A点未设置")
+            if not st.session_state.point_b:
+                debug_info.append("B点未设置")
+            if st.session_state.pending_drawing:
+                debug_info.append("有待确认的地图障碍物")
+            
+            if debug_info and not can_plan:
+                st.caption(f"⚠️ {'; '.join(debug_info)}")
+            
             if st.button("🔄 水平绕行", disabled=not can_plan, use_container_width=True, type="primary"):
-                start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
-                                   st.session_state.flight_altitude, 22)
-                end_wp = Waypoint(st.session_state.point_b[0], st.session_state.point_b[1], 
-                                 st.session_state.flight_altitude, 16)
-                
-                with st.spinner("🧭 正在严格规划绕行路径..."):
-                    path = st.session_state.planner.plan_horizontal_avoidance(start_wp, end_wp)
+                # 再次检查A、B点
+                if st.session_state.point_a and st.session_state.point_b:
+                    start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
+                                       st.session_state.flight_altitude, 22)
+                    end_wp = Waypoint(st.session_state.point_b[0], st.session_state.point_b[1], 
+                                     st.session_state.flight_altitude, 16)
                     
-                    if path is not None:
-                        st.session_state.planned_path_horizontal = path
-                        st.session_state.selected_path_type = 'horizontal'
-                        st.session_state.waypoints = path
-                        
-                        dist = sum(st.session_state.planner.haversine_distance(
-                            path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon)
-                            for i in range(len(path)-1))
-                        
-                        st.success(f"✅ 严格绕行规划成功！{len(path)}个航点, {dist:.0f}m, 安全边距50m")
-                    else:
-                        st.error("❌ 规划失败：无法找到可行的绕行路径")
-                        st.session_state.planned_path_horizontal = None
-                        st.session_state.waypoints = []
-                
-                st.rerun()
+                    with st.spinner("🧭 正在严格规划绕行路径..."):
+                        try:
+                            path = st.session_state.planner.plan_horizontal_avoidance(start_wp, end_wp)
+                            
+                            if path is not None:
+                                st.session_state.planned_path_horizontal = path
+                                st.session_state.selected_path_type = 'horizontal'
+                                st.session_state.waypoints = path
+                                
+                                dist = sum(st.session_state.planner.haversine_distance(
+                                    path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon)
+                                    for i in range(len(path)-1))
+                                
+                                st.success(f"✅ 严格绕行规划成功！{len(path)}个航点, {dist:.0f}m, 安全边距50m")
+                            else:
+                                st.error("❌ 规划失败：无法找到可行的绕行路径")
+                                st.session_state.planned_path_horizontal = None
+                                st.session_state.waypoints = []
+                        except Exception as e:
+                            st.error(f"❌ 规划过程出错: {e}")
+                            import traceback
+                            st.error(traceback.format_exc())
+                    
+                    st.rerun()
+                else:
+                    st.error("❌ 请先设置A点和B点")
         
         with col_c:
             climb_disabled = not can_plan or force_avoidance
