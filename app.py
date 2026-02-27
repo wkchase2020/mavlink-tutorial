@@ -871,13 +871,58 @@ if page == "🗺️ 航线规划":
         # 障碍物管理
         st.markdown("**🧱 障碍物管理**")
         
-        # 方式1: 在地图上圈选（已支持）
-        st.info("💡 **方式1**: 直接在左侧地图上用 🔲矩形/⭕圆形/📐多边形 工具圈选障碍物区域，然后设置高度并确认")
+        # ====== 优先处理地图圈选的待确认障碍物 ======
+        if st.session_state.pending_drawing:
+            drawing = st.session_state.pending_drawing
+            
+            st.warning("⚠️ **请确认地图圈选的障碍物**")
+            
+            if drawing['type'] == 'circle':
+                lat, lon = drawing['center']
+                st.info(f"⭕ 圆形障碍物: 中心({lat:.6f}, {lon:.6f}) 半径{drawing['radius']:.1f}m")
+            else:
+                st.info(f"📐 多边形: {len(drawing['points'])}个顶点")
+            
+            # 使用独立的key，避免与其他number_input冲突
+            map_obs_height = st.number_input(
+                "🗺️ 地图障碍物高度(m)", 
+                min_value=5, max_value=300, 
+                value=max(st.session_state.flight_altitude + 10, 50), 
+                key="map_obs_height"
+            )
+            
+            col_add, col_cancel = st.columns(2)
+            with col_add:
+                if st.button("✅ 确认添加", type="primary", key="confirm_map_obs"):
+                    if drawing['type'] == 'circle':
+                        lat, lon = drawing['center']
+                        st.session_state.planner.add_circle_obstacle(
+                            lat, lon, drawing['radius'], map_obs_height, f"圆形({map_obs_height}m)"
+                        )
+                    else:
+                        st.session_state.planner.add_polygon_obstacle(
+                            drawing['points'], map_obs_height, f"多边形({map_obs_height}m)"
+                        )
+                    st.session_state.pending_drawing = None
+                    st.success("✅ 障碍物已添加")
+                    st.rerun()
+            
+            with col_cancel:
+                if st.button("❌ 取消", key="cancel_map_obs"):
+                    st.session_state.pending_drawing = None
+                    st.rerun()
+            
+            st.markdown("---")
+        
+        # 方式1: 在地图上圈选
+        st.info("💡 **方式1**: 直接在左侧地图上用 🔲矩形/⭕圆形/📐多边形 工具圈选障碍物区域")
         
         # 方式2: 手动输入坐标添加
         with st.expander("➕ 方式2: 手动输入坐标添加障碍物"):
+            st.caption(f"输入坐标系: {st.session_state.coord_system} (将自动转换为WGS-84)")
+            
             obs_type = st.selectbox("障碍物类型", ["矩形", "圆形", "多边形"], key="manual_obs_type")
-            obs_height = st.number_input("障碍物高度(m)", 5, 300, 
+            manual_obs_height = st.number_input("障碍物高度(m)", 5, 300, 
                                         max(st.session_state.flight_altitude + 10, 50), key="manual_obs_h")
             
             # 选择位置来源
@@ -886,48 +931,63 @@ if page == "🗺️ 航线规划":
             if pos_source == "AB中点" and st.session_state.point_a and st.session_state.point_b:
                 default_lat = (st.session_state.point_a[0] + st.session_state.point_b[0]) / 2
                 default_lon = (st.session_state.point_a[1] + st.session_state.point_b[1]) / 2
+                # 转换回当前坐标系显示
+                if st.session_state.coord_system == 'GCJ-02':
+                    default_lat, default_lon = CoordinateConverter.wgs84_to_gcj02(default_lat, default_lon)
             elif pos_source == "A点位置" and st.session_state.point_a:
                 default_lat, default_lon = st.session_state.point_a
+                if st.session_state.coord_system == 'GCJ-02':
+                    default_lat, default_lon = CoordinateConverter.wgs84_to_gcj02(default_lat, default_lon)
             elif pos_source == "B点位置" and st.session_state.point_b:
                 default_lat, default_lon = st.session_state.point_b
+                if st.session_state.coord_system == 'GCJ-02':
+                    default_lat, default_lon = CoordinateConverter.wgs84_to_gcj02(default_lat, default_lon)
             else:
                 default_lat, default_lon = st.session_state.map_center
             
             if obs_type == "矩形":
                 st.markdown("**矩形中心坐标**")
                 c1, c2 = st.columns(2)
-                rect_lat = c1.number_input("中心纬度", value=default_lat, format="%.6f", key="rect_lat")
-                rect_lon = c2.number_input("中心经度", value=default_lon, format="%.6f", key="rect_lon")
+                rect_lat_input = c1.number_input("中心纬度", value=default_lat, format="%.6f", key="rect_lat")
+                rect_lon_input = c2.number_input("中心经度", value=default_lon, format="%.6f", key="rect_lon")
                 rect_w = st.slider("宽度(m)", 10, 500, 50, key="manual_w")
                 rect_h = st.slider("长度(m)", 10, 500, 80, key="manual_h")
                 rect_rot = st.slider("旋转角度(°)", 0, 360, 0, key="manual_rot")
                 
                 if st.button("➕ 添加矩形障碍物", type="primary"):
-                    st.session_state.planner.add_rotated_rectangle_obstacle(
-                        rect_lat, rect_lon, rect_w, rect_h, rect_rot, 
-                        obs_height, f"矩形障碍({obs_height}m)"
+                    # 坐标系转换
+                    rect_lat_wgs, rect_lon_wgs = CoordinateConverter.from_user_input(
+                        rect_lat_input, rect_lon_input, st.session_state.coord_system
                     )
-                    st.success(f"✅ 已添加矩形障碍物 ({rect_lat:.6f}, {rect_lon:.6f})，高度{obs_height}m")
+                    st.session_state.planner.add_rotated_rectangle_obstacle(
+                        rect_lat_wgs, rect_lon_wgs, rect_w, rect_h, rect_rot, 
+                        manual_obs_height, f"矩形障碍({manual_obs_height}m)"
+                    )
+                    st.success(f"✅ 已添加矩形障碍物 ({rect_lat_wgs:.6f}, {rect_lon_wgs:.6f})，高度{manual_obs_height}m")
                     st.rerun()
                     
             elif obs_type == "圆形":
                 st.markdown("**圆形中心坐标**")
                 c1, c2 = st.columns(2)
-                circle_lat = c1.number_input("中心纬度", value=default_lat, format="%.6f", key="circle_lat")
-                circle_lon = c2.number_input("中心经度", value=default_lon, format="%.6f", key="circle_lon")
+                circle_lat_input = c1.number_input("中心纬度", value=default_lat, format="%.6f", key="circle_lat")
+                circle_lon_input = c2.number_input("中心经度", value=default_lon, format="%.6f", key="circle_lon")
                 circle_r = st.slider("半径(m)", 10, 200, 30, key="manual_r")
                 
                 if st.button("➕ 添加圆形障碍物", type="primary"):
-                    st.session_state.planner.add_circle_obstacle(
-                        circle_lat, circle_lon, circle_r, obs_height, 
-                        f"圆形障碍({obs_height}m)"
+                    # 坐标系转换
+                    circle_lat_wgs, circle_lon_wgs = CoordinateConverter.from_user_input(
+                        circle_lat_input, circle_lon_input, st.session_state.coord_system
                     )
-                    st.success(f"✅ 已添加圆形障碍物 ({circle_lat:.6f}, {circle_lon:.6f})，高度{obs_height}m")
+                    st.session_state.planner.add_circle_obstacle(
+                        circle_lat_wgs, circle_lon_wgs, circle_r, manual_obs_height, 
+                        f"圆形障碍({manual_obs_height}m)"
+                    )
+                    st.success(f"✅ 已添加圆形障碍物 ({circle_lat_wgs:.6f}, {circle_lon_wgs:.6f})，高度{manual_obs_height}m")
                     st.rerun()
                     
             else:  # 多边形
                 st.markdown("**多边形顶点坐标** (输入3个以上顶点)")
-                st.caption("格式: 纬度,经度 (每行一个点，按顺序连接)")
+                st.caption(f"格式: 纬度,经度 (每行一个点) | 当前坐标系: {st.session_state.coord_system}")
                 poly_input = st.text_area(
                     "顶点列表",
                     value=f"{default_lat + 0.001:.6f},{default_lon:.6f}\n{default_lat:.6f},{default_lon + 0.001:.6f}\n{default_lat - 0.001:.6f},{default_lon:.6f}",
@@ -937,55 +997,29 @@ if page == "🗺️ 航线规划":
                 
                 if st.button("➕ 添加多边形障碍物", type="primary"):
                     try:
-                        points = []
+                        points_input = []
                         for line in poly_input.strip().split('\n'):
                             line = line.strip()
                             if line and ',' in line:
                                 lat, lon = map(float, line.split(','))
-                                points.append((lat, lon))
+                                points_input.append((lat, lon))
                         
-                        if len(points) >= 3:
+                        if len(points_input) >= 3:
+                            # 坐标系转换
+                            points_wgs = []
+                            for lat, lon in points_input:
+                                lat_wgs, lon_wgs = CoordinateConverter.from_user_input(lat, lon, st.session_state.coord_system)
+                                points_wgs.append((lat_wgs, lon_wgs))
+                            
                             st.session_state.planner.add_polygon_obstacle(
-                                points, obs_height, f"多边形障碍({obs_height}m)"
+                                points_wgs, manual_obs_height, f"多边形障碍({manual_obs_height}m)"
                             )
-                            st.success(f"✅ 已添加多边形障碍物 ({len(points)}个顶点)，高度{obs_height}m")
+                            st.success(f"✅ 已添加多边形障碍物 ({len(points_wgs)}个顶点)，高度{manual_obs_height}m")
                             st.rerun()
                         else:
                             st.error("❌ 多边形需要至少3个顶点")
                     except Exception as e:
                         st.error(f"❌ 输入格式错误: {e}")
-        
-        if st.session_state.pending_drawing:
-            drawing = st.session_state.pending_drawing
-            
-            if drawing['type'] == 'circle':
-                st.success(f"⭕ 圆形障碍物: 半径{drawing['radius']:.1f}m")
-            else:
-                st.success(f"📐 多边形: {len(drawing['points'])}顶点")
-            
-            obs_height = st.number_input("障碍物高度(m)", 5, 300, 
-                                        max(st.session_state.flight_altitude + 10, 50), key="obs_h")
-            
-            col_add, col_cancel = st.columns(2)
-            with col_add:
-                if st.button("✅ 确认添加", type="primary"):
-                    if drawing['type'] == 'circle':
-                        lat, lon = drawing['center']
-                        st.session_state.planner.add_circle_obstacle(
-                            lat, lon, drawing['radius'], obs_height, f"圆形({obs_height}m)"
-                        )
-                    else:
-                        st.session_state.planner.add_polygon_obstacle(
-                            drawing['points'], obs_height, f"多边形({obs_height}m)"
-                        )
-                    st.session_state.pending_drawing = None
-                    st.success("✅ 障碍物已添加")
-                    st.rerun()
-            
-            with col_cancel:
-                if st.button("❌ 取消"):
-                    st.session_state.pending_drawing = None
-                    st.rerun()
         
         # 障碍物列表
         if st.session_state.planner.obstacles:
