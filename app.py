@@ -770,19 +770,28 @@ if page == "🗺️ 航线规划":
         if map_data:
             last_drawing = map_data.get("last_active_drawing")
             
+            # 获取几何类型（处理 GeoJSON Feature 格式）
+            geom_type = None
+            if last_drawing:
+                if last_drawing.get("type") == "Feature":
+                    # GeoJSON Feature 格式
+                    geom_type = last_drawing.get("geometry", {}).get("type")
+                else:
+                    # 直接类型
+                    geom_type = last_drawing.get("type")
+            
             # 调试信息
             st.session_state["debug_map"] = {
                 "has_last_drawing": last_drawing is not None,
                 "last_drawing_type": last_drawing.get("type") if last_drawing else None,
+                "geom_type": geom_type,
                 "pending_exists": st.session_state.pending_drawing is not None,
             }
             
             # 只要有 last_drawing 且没有待处理的绘制，就处理
             if last_drawing and st.session_state.pending_drawing is None:
-                geom_type = last_drawing.get("type")
-                
                 try:
-                    if geom_type == "circle":
+                    if geom_type == "Point":  # Circle 在 GeoJSON 中是 Point
                         center = last_drawing["geometry"]["coordinates"]
                         radius = last_drawing.get("properties", {}).get("radius", 50)
                         st.session_state.pending_drawing = {
@@ -791,7 +800,7 @@ if page == "🗺️ 航线规划":
                             'radius': radius
                         }
                         st.rerun()
-                    elif geom_type in ["polygon", "rectangle"]:
+                    elif geom_type in ["Polygon", "polygon"]:
                         coords = last_drawing["geometry"]["coordinates"][0]
                         points = [(c[1], c[0]) for c in coords[:-1]]
                         st.session_state.pending_drawing = {
@@ -800,8 +809,9 @@ if page == "🗺️ 航线规划":
                         }
                         st.rerun()
                     else:
-                        # 未知类型，显示调试信息
-                        st.session_state["debug_map"]["unknown_type"] = geom_type
+                        # 未知类型，记录完整数据结构用于调试
+                        st.session_state["debug_map"]["unknown_geom_type"] = geom_type
+                        st.session_state["debug_map"]["full_drawing"] = str(last_drawing)[:200]
                 except Exception as e:
                     st.session_state["debug_map"]["error"] = str(e)
     
@@ -886,6 +896,11 @@ if page == "🗺️ 航线规划":
         # 障碍物管理
         st.markdown("**🧱 障碍物管理**")
         
+        # 计算 can_plan (必须在调试信息之前定义)
+        has_a = st.session_state.point_a is not None
+        has_b = st.session_state.point_b is not None
+        can_plan = has_a and has_b
+        
         # 调试信息显示
         with st.expander("🔧 调试信息", expanded=True):
             st.write("地图调试:", st.session_state.get("debug_map", {}))
@@ -893,9 +908,7 @@ if page == "🗺️ 航线规划":
             st.write("障碍物数量:", len(st.session_state.planner.obstacles))
             st.write("A点:", st.session_state.point_a)
             st.write("B点:", st.session_state.point_b)
-            has_a = st.session_state.point_a is not None
-            has_b = st.session_state.point_b is not None
-            st.write("can_plan:", has_a and has_b)
+            st.write("can_plan:", can_plan)
         
         # ====== 优先处理地图圈选的待确认障碍物 ======
         if st.session_state.pending_drawing:
@@ -1070,11 +1083,7 @@ if page == "🗺️ 航线规划":
         
         st.markdown("---")
         
-        # 路径规划
-        has_a = st.session_state.point_a is not None
-        has_b = st.session_state.point_b is not None
-        can_plan = has_a and has_b
-        
+        # 路径规划 (can_plan 已在上方定义)
         # 显示当前规划状态
         plan_status = []
         plan_status.append("✅ A点已设" if has_a else "❌ A点未设")
@@ -1088,13 +1097,19 @@ if page == "🗺️ 航线规划":
         col_h, col_c = st.columns(2)
         
         with col_h:
-            # 显示按钮状态
-            if not can_plan:
-                st.caption("⚠️ 按钮已禁用：请先设置A点和B点")
+            # 显示按钮状态调试
+            st.caption(f"按钮状态: can_plan={can_plan}, disabled={not can_plan}")
             
-            btn_horizontal = st.button("🔄 水平绕行", disabled=not can_plan, use_container_width=True, type="primary", key="btn_h_v4")
+            # 使用表单避免重复提交问题
+            with st.form(key="horizontal_form"):
+                submit_btn = st.form_submit_button(
+                    "🔄 水平绕行", 
+                    disabled=not can_plan,
+                    use_container_width=True,
+                    type="primary"
+                )
             
-            if btn_horizontal:
+            if submit_btn:
                 st.write("📝 按钮被点击，开始规划...")
                 
                 start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
