@@ -767,12 +767,12 @@ if page == "🗺️ 航线规划":
         
         # 处理地图绘制
         if map_data:
-            all_drawings = map_data.get("all_drawings", [])
+            all_drawings = map_data.get("all_drawings") or []
             last_drawing = map_data.get("last_active_drawing")
             
             # 使用绘制数量来判断是否有新绘制
             prev_count = st.session_state.get("drawings_count", 0)
-            curr_count = len(all_drawings)
+            curr_count = len(all_drawings) if isinstance(all_drawings, list) else 0
             
             # 如果有新的绘制且没有待确认的障碍物
             if curr_count > prev_count and last_drawing and not st.session_state.pending_drawing:
