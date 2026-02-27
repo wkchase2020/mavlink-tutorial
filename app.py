@@ -345,29 +345,35 @@ class GridPathPlanner:
         return (lat_min - lat_margin, lat_max + lat_margin, 
                 lon_min - lon_margin, lon_max + lon_margin)
     
-    def plan_horizontal_avoidance(self, start_wp, end_wp):
-        """【严格】强制水平绕行路径规划 - 绝不穿行"""
+    def plan_horizontal_avoidance(self, start_wp, end_wp, bias=0):
+        """
+        【严格】强制水平绕行路径规划 - 绝不穿行
+        bias: 绕行偏向 (-1=左偏, 0=最优, 1=右偏)
+        """
         start = (start_wp.lat, start_wp.lon)
         end = (end_wp.lat, end_wp.lon)
         flight_alt = start_wp.alt
         
         # 【关键】严格检查起点和终点
         if self.is_collision(start[0], start[1], flight_alt):
-            st.error("❌ 起点在障碍物安全边界内，请调整起点位置")
-            return None
+            return None, "起点在障碍物安全边界内"
         if self.is_collision(end[0], end[1], flight_alt):
-            st.error("❌ 终点在障碍物安全边界内，请调整终点位置")
-            return None
+            return None, "终点在障碍物安全边界内"
         
         # 【关键】首先检查直线路径是否安全
         if not self.line_hits_obstacle(start, end, flight_alt):
-            st.info("✓ 直线路径安全，无需绕行")
-            return [start_wp, end_wp]
-        
-        st.warning("⚠️ 检测到障碍物，开始规划绕行路径...")
+            return [start_wp, end_wp], "直线路径安全"
         
         # 获取包含障碍物的边界框
         lat_min, lat_max, lon_min, lon_max = self.get_bounding_box_with_obstacles(start, end)
+        
+        # 根据偏向调整边界框（实现左右绕行）
+        lat_range = lat_max - lat_min
+        lon_range = lon_max - lon_min
+        if bias < 0:  # 左偏 - 扩展左侧边界
+            lon_min -= lon_range * 0.3
+        elif bias > 0:  # 右偏 - 扩展右侧边界
+            lon_max += lon_range * 0.3
         
         base_lat = lat_min
         base_lon = lon_min
@@ -463,13 +469,76 @@ class GridPathPlanner:
         if best_path is not None:
             # 最终验证
             if self.validate_path(best_path, flight_alt):
-                return best_path
+                return best_path, "规划成功"
             else:
-                st.error("❌ 路径验证失败")
-                return None
+                return None, "路径验证失败"
         
-        st.error("❌ 无法找到可行的绕行路径，障碍物可能完全阻挡了通道")
-        return None
+        return None, "无法找到可行的绕行路径"
+    
+    def plan_multiple_paths(self, start_wp, end_wp, max_altitude):
+        """规划多条路径供选择"""
+        paths = {}
+        
+        # 1. 左绕行
+        left_path, left_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=-1)
+        if left_path:
+            paths['left'] = {
+                'path': left_path,
+                'name': '⬅️ 左侧绕行',
+                'distance': sum(self.haversine_distance(
+                    left_path[i].lat, left_path[i].lon,
+                    left_path[i+1].lat, left_path[i+1].lon) for i in range(len(left_path)-1)),
+                'type': 'horizontal'
+            }
+        
+        # 2. 右绕行
+        right_path, right_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=1)
+        if right_path:
+            paths['right'] = {
+                'path': right_path,
+                'name': '➡️ 右侧绕行',
+                'distance': sum(self.haversine_distance(
+                    right_path[i].lat, right_path[i].lon,
+                    right_path[i+1].lat, right_path[i+1].lon) for i in range(len(right_path)-1)),
+                'type': 'horizontal'
+            }
+        
+        # 3. 最优绕行
+        best_path, best_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=0)
+        if best_path and len(best_path) == 2:  # 直线路径
+            paths['direct'] = {
+                'path': best_path,
+                'name': '⬆️ 直线飞行',
+                'distance': sum(self.haversine_distance(
+                    best_path[i].lat, best_path[i].lon,
+                    best_path[i+1].lat, best_path[i+1].lon) for i in range(len(best_path)-1)),
+                'type': 'direct'
+            }
+        elif best_path:
+            paths['best'] = {
+                'path': best_path,
+                'name': '✨ 最优绕行',
+                'distance': sum(self.haversine_distance(
+                    best_path[i].lat, best_path[i].lon,
+                    best_path[i+1].lat, best_path[i+1].lon) for i in range(len(best_path)-1)),
+                'type': 'horizontal'
+            }
+        
+        # 4. 爬升飞越（如果可行）
+        climb_path = self.plan_climb_over(start_wp, end_wp, max_altitude)
+        if climb_path and len(climb_path) > 0:
+            max_fly_alt = max(wp.alt for wp in climb_path)
+            paths['climb'] = {
+                'path': climb_path,
+                'name': '⬆️ 爬升飞越',
+                'distance': sum(self.haversine_distance(
+                    climb_path[i].lat, climb_path[i].lon,
+                    climb_path[i+1].lat, climb_path[i+1].lon) for i in range(len(climb_path)-1)),
+                'max_altitude': max_fly_alt,
+                'type': 'climb'
+            }
+        
+        return paths
     
     def smooth_path(self, waypoints, flight_alt):
         """路径平滑 - 移除不必要的中间点"""
@@ -595,6 +664,8 @@ def init_session_state():
         'pending_drawing': None,
         'drawings_count': 0,
         'last_processed_drawing': None,
+        'available_paths': {},
+        'selected_path_name': None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -636,9 +707,12 @@ with st.sidebar:
             st.error("⚠️ 强制绕行模式")
     
     if st.session_state.waypoints:
-        path_type = "水平绕行" if st.session_state.selected_path_type == 'horizontal' else "爬升飞越" if st.session_state.selected_path_type == 'climb' else "无"
-        st.metric("当前路径类型", path_type)
+        path_name = st.session_state.get('selected_path_name', '未命名')
+        st.metric("选中路径", path_name)
         st.metric("航点数量", len(st.session_state.waypoints))
+    
+    if st.session_state.get('available_paths'):
+        st.metric("可选路径数", len(st.session_state['available_paths']))
 
 
 # ==================== 航线规划页面 ====================
@@ -1082,9 +1156,23 @@ if page == "🗺️ 航线规划":
                 for i, obs in enumerate(st.session_state.planner.obstacles):
                     icon = "⭕" if obs.type == "circle" else "⬜" if obs.type == "rectangle" else "📐"
                     is_blocking = "🔴" if obs.height >= st.session_state.flight_altitude else "🟢"
-                    st.write(f"{is_blocking} {icon} #{i+1}: {obs.name} - {obs.height}m")
+                    
+                    col_obs, col_del = st.columns([4, 1])
+                    with col_obs:
+                        st.write(f"{is_blocking} {icon} #{i+1}: {obs.name} - {obs.height}m")
+                    with col_del:
+                        if st.button("🗑️", key=f"del_obs_{i}", help=f"删除障碍物 #{i+1}"):
+                            # 删除指定索引的障碍物
+                            st.session_state.planner.obstacles.pop(i)
+                            # 清除已规划的路径
+                            st.session_state.planned_path_horizontal = None
+                            st.session_state.planned_path_climb = None
+                            st.session_state.waypoints = []
+                            st.success(f"✅ 已删除障碍物 #{i+1}")
+                            st.rerun()
                 
-                if st.button("🗑️ 清除全部障碍物"):
+                st.markdown("---")
+                if st.button("🗑️ 清除全部障碍物", key="clear_all_obs"):
                     st.session_state.planner.clear_obstacles()
                     st.session_state.planned_path_horizontal = None
                     st.session_state.planned_path_climb = None
@@ -1102,86 +1190,63 @@ if page == "🗺️ 航线规划":
         
         st.markdown(f"**🧭 路径规划** ({' | '.join(plan_status)})")
         
+        # 检查是否可以爬升飞越
         force_avoidance = st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude)
+        can_climb = not force_avoidance
         
-        col_h, col_c = st.columns(2)
-        
-        with col_h:
-            # 显示按钮状态调试
-            st.caption(f"按钮状态: can_plan={can_plan}, disabled={not can_plan}")
-            
-            # 使用表单 - 所有逻辑必须在表单内部
-            with st.form(key="horizontal_form"):
-                submit_btn = st.form_submit_button(
-                    "🔄 水平绕行", 
-                    disabled=not can_plan,
-                    use_container_width=True,
-                    type="primary"
-                )
-                
-                if submit_btn:
-                    st.write("📝 按钮被点击，开始规划...")
-                    
-                    start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
-                                       st.session_state.flight_altitude, 22)
-                    end_wp = Waypoint(st.session_state.point_b[0], st.session_state.point_b[1], 
-                                     st.session_state.flight_altitude, 16)
-                    
-                    with st.spinner("🧭 正在严格规划绕行路径..."):
-                        try:
-                            path = st.session_state.planner.plan_horizontal_avoidance(start_wp, end_wp)
-                            
-                            if path is not None:
-                                st.session_state.planned_path_horizontal = path
-                                st.session_state.selected_path_type = 'horizontal'
-                                st.session_state.waypoints = path
-                                
-                                dist = sum(st.session_state.planner.haversine_distance(
-                                    path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon)
-                                    for i in range(len(path)-1))
-                                
-                                st.success(f"✅ 严格绕行规划成功！{len(path)}个航点, {dist:.0f}m, 安全边距50m")
-                            else:
-                                st.error("❌ 规划失败：无法找到可行的绕行路径")
-                                st.session_state.planned_path_horizontal = None
-                                st.session_state.waypoints = []
-                        except Exception as e:
-                            st.error(f"❌ 规划过程出错: {e}")
-                            import traceback
-                            st.error(traceback.format_exc())
-        
-        with col_c:
-            climb_disabled = not can_plan or force_avoidance
-            climb_help = "有障碍物高于飞行高度，强制绕行" if force_avoidance else ""
-            
-            if st.button("⬆️ 爬升飞越", disabled=climb_disabled, use_container_width=True, help=climb_help):
+        # 规划所有路径按钮
+        if st.button("🧮 规划所有路径", disabled=not can_plan, type="primary", use_container_width=True):
+            if st.session_state.point_a and st.session_state.point_b:
                 start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
                                    st.session_state.flight_altitude, 22)
                 end_wp = Waypoint(st.session_state.point_b[0], st.session_state.point_b[1], 
                                  st.session_state.flight_altitude, 16)
                 
-                with st.spinner("规划爬升路径..."):
-                    path = st.session_state.planner.plan_climb_over(start_wp, end_wp, 
-                                                                    st.session_state.max_altitude)
-                    if path:
-                        st.session_state.planned_path_climb = path
-                        st.session_state.selected_path_type = 'climb'
-                        st.session_state.waypoints = path
-                        
-                        max_fly = max(wp.alt for wp in path)
-                        dist = sum(st.session_state.planner.haversine_distance(
-                            path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon)
-                            for i in range(len(path)-1))
-                        st.success(f"✅ 爬升飞越: 最高{max_fly}m, 总长{dist:.0f}m")
+                with st.spinner("🧭 正在规划多条路径..."):
+                    all_paths = st.session_state.planner.plan_multiple_paths(
+                        start_wp, end_wp, st.session_state.max_altitude
+                    )
+                    st.session_state['available_paths'] = all_paths
+                    
+                    if all_paths:
+                        st.success(f"✅ 规划完成！共 {len(all_paths)} 条可选路径")
                     else:
-                        st.error("❌ 爬升飞越不可行")
-                    st.rerun()
+                        st.error("❌ 无法找到可行路径")
+                st.rerun()
         
-        # 路径选择
+        # 显示可选路径列表
+        if st.session_state.get('available_paths'):
+            st.markdown("---")
+            st.markdown("**📍 可选路径**")
+            
+            paths = st.session_state['available_paths']
+            
+            # 按距离排序
+            sorted_paths = sorted(paths.items(), key=lambda x: x[1]['distance'])
+            
+            for path_key, path_info in sorted_paths:
+                col_path, col_btn = st.columns([3, 1])
+                
+                with col_path:
+                    if path_info['type'] == 'climb':
+                        st.write(f"{path_info['name']}: {path_info['distance']:.0f}m, 最高{path_info['max_altitude']:.0f}m")
+                    else:
+                        st.write(f"{path_info['name']}: {path_info['distance']:.0f}m, {len(path_info['path'])}个航点")
+                
+                with col_btn:
+                    if st.button("选择", key=f"select_{path_key}"):
+                        st.session_state.waypoints = path_info['path']
+                        st.session_state.selected_path_type = path_info['type']
+                        st.session_state.selected_path_name = path_info['name']
+                        st.success(f"✅ 已选择: {path_info['name']}")
+                        st.rerun()
+        
+        # 显示当前选中的路径
         if st.session_state.waypoints:
             st.markdown("---")
-            st.markdown("**✅ 已规划路径**")
-            st.success(f"当前路径: {len(st.session_state.waypoints)}个航点, 类型: {st.session_state.selected_path_type}")
+            st.markdown("**✅ 当前选中路径**")
+            path_name = st.session_state.get('selected_path_name', '未命名路径')
+            st.success(f"{path_name}: {len(st.session_state.waypoints)}个航点")
             
             # 显示详细航点信息
             with st.expander("📋 航点详情"):
