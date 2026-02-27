@@ -1100,7 +1100,7 @@ if page == "🗺️ 航线规划":
             # 显示按钮状态调试
             st.caption(f"按钮状态: can_plan={can_plan}, disabled={not can_plan}")
             
-            # 使用表单避免重复提交问题
+            # 使用表单 - 所有逻辑必须在表单内部
             with st.form(key="horizontal_form"):
                 submit_btn = st.form_submit_button(
                     "🔄 水平绕行", 
@@ -1108,39 +1108,37 @@ if page == "🗺️ 航线规划":
                     use_container_width=True,
                     type="primary"
                 )
-            
-            if submit_btn:
-                st.write("📝 按钮被点击，开始规划...")
                 
-                start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
-                                   st.session_state.flight_altitude, 22)
-                end_wp = Waypoint(st.session_state.point_b[0], st.session_state.point_b[1], 
-                                 st.session_state.flight_altitude, 16)
-                
-                with st.spinner("🧭 正在严格规划绕行路径..."):
-                    try:
-                        path = st.session_state.planner.plan_horizontal_avoidance(start_wp, end_wp)
-                        
-                        if path is not None:
-                            st.session_state.planned_path_horizontal = path
-                            st.session_state.selected_path_type = 'horizontal'
-                            st.session_state.waypoints = path
+                if submit_btn:
+                    st.write("📝 按钮被点击，开始规划...")
+                    
+                    start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
+                                       st.session_state.flight_altitude, 22)
+                    end_wp = Waypoint(st.session_state.point_b[0], st.session_state.point_b[1], 
+                                     st.session_state.flight_altitude, 16)
+                    
+                    with st.spinner("🧭 正在严格规划绕行路径..."):
+                        try:
+                            path = st.session_state.planner.plan_horizontal_avoidance(start_wp, end_wp)
                             
-                            dist = sum(st.session_state.planner.haversine_distance(
-                                path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon)
-                                for i in range(len(path)-1))
-                            
-                            st.success(f"✅ 严格绕行规划成功！{len(path)}个航点, {dist:.0f}m, 安全边距50m")
-                        else:
-                            st.error("❌ 规划失败：无法找到可行的绕行路径")
-                            st.session_state.planned_path_horizontal = None
-                            st.session_state.waypoints = []
-                    except Exception as e:
-                        st.error(f"❌ 规划过程出错: {e}")
-                        import traceback
-                        st.error(traceback.format_exc())
-                
-                st.rerun()
+                            if path is not None:
+                                st.session_state.planned_path_horizontal = path
+                                st.session_state.selected_path_type = 'horizontal'
+                                st.session_state.waypoints = path
+                                
+                                dist = sum(st.session_state.planner.haversine_distance(
+                                    path[i].lat, path[i].lon, path[i+1].lat, path[i+1].lon)
+                                    for i in range(len(path)-1))
+                                
+                                st.success(f"✅ 严格绕行规划成功！{len(path)}个航点, {dist:.0f}m, 安全边距50m")
+                            else:
+                                st.error("❌ 规划失败：无法找到可行的绕行路径")
+                                st.session_state.planned_path_horizontal = None
+                                st.session_state.waypoints = []
+                        except Exception as e:
+                            st.error(f"❌ 规划过程出错: {e}")
+                            import traceback
+                            st.error(traceback.format_exc())
         
         with col_c:
             climb_disabled = not can_plan or force_avoidance
