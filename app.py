@@ -623,15 +623,16 @@ class GridPathPlanner:
                 # 基础启发式：到终点的距离
                 h_base = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
                 
-                # 添加bias引导：左绕行鼓励向西(y减小)，右绕行鼓励向东(y增加)
-                # 假设x是东西方向（经度），y是南北方向（纬度）
+                # 添加bias引导：左绕行鼓励向西(grid_x减小)，右绕行鼓励向东(grid_x增加)
+                # grid_x对应经度：向东（右）增加，向西（左）减小
+                # grid_y对应纬度：向北增加，向南减小
                 h_bias = 0
-                if bias < 0:  # 左绕行：鼓励向西（y减小）
-                    # 惩罚向东走（y增加），奖励向西走
-                    h_bias = (ny - start_grid[1]) * self.grid_size * 0.3
-                elif bias > 0:  # 右绕行：鼓励向东（y增加）
-                    # 惩罚向西走，奖励向东走
-                    h_bias = (start_grid[1] - ny) * self.grid_size * 0.3
+                if bias < 0:  # 左绕行：鼓励向西（grid_x减小）
+                    # 惩罚向东走（grid_x大），奖励向西走（grid_x小）
+                    h_bias = (nx - start_grid[0]) * self.grid_size * 0.5
+                elif bias > 0:  # 右绕行：鼓励向东（grid_x增加）
+                    # 惩罚向西走（grid_x小），奖励向东走（grid_x大）
+                    h_bias = (start_grid[0] - nx) * self.grid_size * 0.5
                 
                 h = h_base + h_bias
                 
@@ -1481,54 +1482,6 @@ if page == "🗺️ 航线规划":
 elif page == "✈️ 飞行监控":
     st.title("✈️ 飞行监控 - 实时进程显示")
     
-    # 检查是否需要自动刷新（用于飞行动画）
-    if st.session_state.mission_executing and st.session_state.drone_position:
-        curr = st.session_state.current_waypoint_index
-        total = len(st.session_state.waypoints)
-        if curr < total - 1:
-            # 执行任务步骤并自动刷新
-            curr_wp = st.session_state.waypoints[curr]
-            next_wp = st.session_state.waypoints[curr + 1]
-            
-            step = st.session_state.animation_step
-            total_steps = 15
-            
-            if step < total_steps:
-                r = step / total_steps
-                new_lat = curr_wp.lat + (next_wp.lat - curr_wp.lat) * r
-                new_lon = curr_wp.lon + (next_wp.lon - curr_wp.lon) * r
-                new_alt = curr_wp.alt + (next_wp.alt - curr_wp.alt) * r
-                
-                st.session_state.drone_position = [new_lat, new_lon]
-                if step % 3 == 0:
-                    st.session_state.flight_path_history.append([new_lat, new_lon])
-                
-                current_time = time.time()
-                if current_time - st.session_state.flight_stats.get('last_telemetry_log', 0) > 3:
-                    st.session_state.flight_stats['speed'] = 8.5 + (current_time % 5) * 0.2
-                    st.session_state.flight_stats['battery'] = max(0, 100 - int((current_time - st.session_state.flight_stats.get('start_time', current_time)) / 10))
-                    st.session_state.comm_logger.log_telemetry(
-                        new_lat, new_lon, new_alt,
-                        st.session_state.flight_stats['speed'],
-                        st.session_state.flight_stats['battery'],
-                        curr + 1, total
-                    )
-                    st.session_state.flight_stats['last_telemetry_log'] = current_time
-                
-                st.session_state.animation_step += 1
-                time.sleep(0.2)
-                st.rerun()
-            else:
-                st.session_state.current_waypoint_index += 1
-                st.session_state.animation_step = 0
-                st.session_state.comm_logger.log_waypoint_reached(curr + 1, total)
-                if st.session_state.current_waypoint_index >= total - 1:
-                    st.session_state.comm_logger.log_flight_complete()
-                    st.session_state.mission_executing = False
-                else:
-                    time.sleep(0.2)
-                    st.rerun()
-    
     if not st.session_state.mission_sent:
         st.warning("请先规划并上传航线")
     else:
@@ -1721,6 +1674,56 @@ elif page == "✈️ 飞行监控":
                         st.session_state.flight_path_history[i][1]
                     )
             st.code(f"已飞距离: {total_dist:.1f}m\n预计剩余: {max(0, 100-prog)}%")
+        
+        # ===== 飞行动画执行逻辑（放在最后，确保UI先渲染） =====
+        if st.session_state.mission_executing and st.session_state.drone_position and curr < total - 1:
+            curr_wp = st.session_state.waypoints[curr]
+            next_wp = st.session_state.waypoints[curr + 1]
+            
+            step = st.session_state.animation_step
+            total_steps = 10  # 每段分10步，每步约1秒
+            
+            # 显示进度
+            st.progress(step / total_steps, text=f"飞往航点 {curr+2}/{total} - 步骤 {step}/{total_steps}")
+            
+            if step < total_steps:
+                r = step / total_steps
+                new_lat = curr_wp.lat + (next_wp.lat - curr_wp.lat) * r
+                new_lon = curr_wp.lon + (next_wp.lon - curr_wp.lon) * r
+                new_alt = curr_wp.alt + (next_wp.alt - curr_wp.alt) * r
+                
+                st.session_state.drone_position = [new_lat, new_lon]
+                if step % 2 == 0:
+                    st.session_state.flight_path_history.append([new_lat, new_lon])
+                
+                # 记录遥测
+                current_time = time.time()
+                if current_time - st.session_state.flight_stats.get('last_telemetry_log', 0) > 3:
+                    st.session_state.flight_stats['speed'] = 8.5 + (current_time % 5) * 0.2
+                    elapsed = current_time - st.session_state.flight_stats.get('start_time', current_time)
+                    st.session_state.flight_stats['battery'] = max(0, 100 - int(elapsed / 10))
+                    st.session_state.comm_logger.log_telemetry(
+                        new_lat, new_lon, new_alt,
+                        st.session_state.flight_stats['speed'],
+                        st.session_state.flight_stats['battery'],
+                        curr + 1, total
+                    )
+                    st.session_state.flight_stats['last_telemetry_log'] = current_time
+                
+                st.session_state.animation_step += 1
+                time.sleep(1.0)  # 每步1秒，让用户能看清
+                st.rerun()
+            else:
+                # 完成当前航段
+                st.session_state.current_waypoint_index += 1
+                st.session_state.animation_step = 0
+                st.session_state.comm_logger.log_waypoint_reached(curr + 1, total)
+                if st.session_state.current_waypoint_index >= total - 1:
+                    st.session_state.comm_logger.log_flight_complete()
+                    st.session_state.mission_executing = False
+                else:
+                    time.sleep(0.5)
+                    st.rerun()
 
 
 # ==================== 通信日志页面 ====================
