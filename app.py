@@ -2,6 +2,7 @@ import streamlit as st
 import time
 import math
 import heapq
+import json
 from datetime import datetime, timedelta
 from collections import deque
 import folium
@@ -832,6 +833,8 @@ def init_session_state():
         # 自动刷新控制
         'auto_refresh': True,
         'refresh_interval': 1.0,  # 秒
+        # 障碍物记忆功能
+        'saved_obstacles': [],  # 保存的障碍物列表
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1350,12 +1353,78 @@ if page == "🗺️ 航线规划":
                             st.rerun()
                 
                 st.markdown("---")
-                if st.button("🗑️ 清除全部障碍物", key="clear_all_obs"):
-                    st.session_state.planner.clear_obstacles()
-                    st.session_state.planned_path_horizontal = None
-                    st.session_state.planned_path_climb = None
-                    st.session_state.waypoints = []
-                    st.rerun()
+                col_clear, col_save = st.columns(2)
+                with col_clear:
+                    if st.button("🗑️ 清除全部障碍物", key="clear_all_obs"):
+                        st.session_state.planner.clear_obstacles()
+                        st.session_state.planned_path_horizontal = None
+                        st.session_state.planned_path_climb = None
+                        st.session_state.waypoints = []
+                        st.rerun()
+                with col_save:
+                    if st.button("💾 记忆当前障碍物", key="save_obstacles"):
+                        # 保存当前障碍物到session_state
+                        saved = []
+                        for obs in st.session_state.planner.obstacles:
+                            obs_data = {
+                                'type': obs.type,
+                                'points': obs.points,
+                                'height': obs.height,
+                                'name': obs.name,
+                                'rotation': obs.rotation,
+                                'width': obs.width,
+                                'height_m': obs.height_m,
+                            }
+                            if obs.type == 'circle':
+                                obs_data['radius'] = obs.radius
+                            saved.append(obs_data)
+                        st.session_state.saved_obstacles = saved
+                        st.success(f"✅ 已保存 {len(saved)} 个障碍物")
+        
+        # 恢复障碍物区域
+        if st.session_state.saved_obstacles:
+            with st.expander(f"💾 已保存的障碍物 ({len(st.session_state.saved_obstacles)}个)", expanded=False):
+                st.info("点击「恢复」可一键添加保存的障碍物")
+                
+                col_restore, col_clear_saved = st.columns(2)
+                with col_restore:
+                    if st.button("🔄 恢复保存的障碍物", type="primary", key="restore_obstacles"):
+                        # 先清除现有障碍物
+                        st.session_state.planner.clear_obstacles()
+                        # 恢复保存的障碍物
+                        for obs_data in st.session_state.saved_obstacles:
+                            if obs_data['type'] == 'circle':
+                                st.session_state.planner.add_circle_obstacle(
+                                    obs_data['points'][0][0], 
+                                    obs_data['points'][0][1],
+                                    obs_data.get('radius', 30),
+                                    obs_data['height'],
+                                    obs_data['name']
+                                )
+                            elif obs_data['type'] == 'rectangle':
+                                st.session_state.planner.add_rotated_rectangle_obstacle(
+                                    obs_data['points'][0][0],
+                                    obs_data['points'][0][1],
+                                    obs_data['width'],
+                                    obs_data['height_m'],
+                                    obs_data['rotation'],
+                                    obs_data['height'],
+                                    obs_data['name']
+                                )
+                            else:  # polygon
+                                st.session_state.planner.add_polygon_obstacle(
+                                    obs_data['points'],
+                                    obs_data['height'],
+                                    obs_data['name']
+                                )
+                        st.success(f"✅ 已恢复 {len(st.session_state.saved_obstacles)} 个障碍物")
+                        st.rerun()
+                
+                with col_clear_saved:
+                    if st.button("🗑️ 清除记忆", key="clear_saved"):
+                        st.session_state.saved_obstacles = []
+                        st.success("✅ 已清除保存的障碍物")
+                        st.rerun()
         
         st.markdown("---")
         
@@ -1572,108 +1641,112 @@ elif page == "✈️ 飞行监控":
             else:
                 st.warning("⏸️ 任务已暂停或待执行")
         
-        # 地图显示 - 实时飞行进程
-        col_map, col_info = st.columns([3, 1])
+        # 使用占位符减少闪烁
+        map_placeholder = st.empty()
         
-        with col_map:
-            st.subheader("🗺️ 实时飞行地图")
+        with map_placeholder.container():
+            # 地图显示 - 实时飞行进程
+            col_map, col_info = st.columns([3, 1])
             
-            if st.session_state.drone_position:
-                center = st.session_state.drone_position
-            elif st.session_state.waypoints:
-                center = [st.session_state.waypoints[0].lat, st.session_state.waypoints[0].lon]
-            else:
-                center = st.session_state.map_center
-            
-            # 使用 OpenStreetMap 作为默认底图（更稳定）
-            m = folium.Map(location=center, zoom_start=17, tiles="OpenStreetMap")
-            
-            folium.TileLayer(
-                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                attr='Esri',
-                name='卫星影像',
-                overlay=False,
-                control=True
-            ).add_to(m)
-            
-            if st.session_state.waypoints:
-                # 1. 完整计划航线（灰色虚线）
-                full_path = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
-                folium.PolyLine(full_path, color='gray', weight=2, opacity=0.4, 
-                               dash_array='5,10', popup="计划航线").add_to(m)
+            with col_map:
+                st.subheader("🗺️ 实时飞行地图")
                 
-                # 2. 所有航点
-                for i, wp in enumerate(st.session_state.waypoints):
-                    if i == 0:
-                        folium.Marker([wp.lat, wp.lon], popup=f"🟢 起点<br>高度:{wp.alt}m",
-                                    icon=folium.Icon(color='green', icon='play', prefix='glyphicon')).add_to(m)
-                    elif i == len(st.session_state.waypoints) - 1:
-                        folium.Marker([wp.lat, wp.lon], popup=f"🔴 终点<br>高度:{wp.alt}m",
-                                    icon=folium.Icon(color='red', icon='stop', prefix='glyphicon')).add_to(m)
-                    else:
-                        color = 'blue' if i > curr else 'gray'
-                        folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True, fillOpacity=0.7,
-                                          popup=f'航点{i}<br>高度:{wp.alt}m<br>{"✅ 已过" if i <= curr else "⏳ 待飞"}').add_to(m)
+                if st.session_state.drone_position:
+                    center = st.session_state.drone_position
+                elif st.session_state.waypoints:
+                    center = [st.session_state.waypoints[0].lat, st.session_state.waypoints[0].lon]
+                else:
+                    center = st.session_state.map_center
                 
-                # 3. 已飞路径（绿色实线）
+                # 使用 OpenStreetMap 作为默认底图（更稳定）
+                m = folium.Map(location=center, zoom_start=17, tiles="OpenStreetMap")
+                
+                folium.TileLayer(
+                    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                    attr='Esri',
+                    name='卫星影像',
+                    overlay=False,
+                    control=True
+                ).add_to(m)
+                
+                if st.session_state.waypoints:
+                    # 1. 完整计划航线（灰色虚线）
+                    full_path = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
+                    folium.PolyLine(full_path, color='gray', weight=2, opacity=0.4, 
+                                   dash_array='5,10', popup="计划航线").add_to(m)
+                    
+                    # 2. 所有航点
+                    for i, wp in enumerate(st.session_state.waypoints):
+                        if i == 0:
+                            folium.Marker([wp.lat, wp.lon], popup=f"🟢 起点<br>高度:{wp.alt}m",
+                                        icon=folium.Icon(color='green', icon='play', prefix='glyphicon')).add_to(m)
+                        elif i == len(st.session_state.waypoints) - 1:
+                            folium.Marker([wp.lat, wp.lon], popup=f"🔴 终点<br>高度:{wp.alt}m",
+                                        icon=folium.Icon(color='red', icon='stop', prefix='glyphicon')).add_to(m)
+                        else:
+                            color = 'blue' if i > curr else 'gray'
+                            folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True, fillOpacity=0.7,
+                                              popup=f'航点{i}<br>高度:{wp.alt}m<br>{"✅ 已过" if i <= curr else "⏳ 待飞"}').add_to(m)
+                    
+                    # 3. 已飞路径（绿色实线）
+                    if len(st.session_state.flight_path_history) > 1:
+                        folium.PolyLine(st.session_state.flight_path_history, color='#00FF00', weight=6, opacity=0.9,
+                                       popup="已飞路径").add_to(m)
+                        
+                        # 飞行轨迹点
+                        for i in range(0, len(st.session_state.flight_path_history)-1, max(1, len(st.session_state.flight_path_history)//5)):
+                            folium.CircleMarker(st.session_state.flight_path_history[i], radius=2, color='lime', 
+                                              fill=True, fillOpacity=0.8).add_to(m)
+                    
+                    # 4. 剩余路径（亮蓝色动画线）
+                    if curr < total - 1 and st.session_state.drone_position:
+                        remaining_path = [st.session_state.drone_position]
+                        for i in range(curr + 1, total):
+                            remaining_path.append([st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon])
+                        
+                        if len(remaining_path) > 1:
+                            AntPath(remaining_path, color='#00BFFF', weight=4, opacity=0.8,
+                                   dash_array=[10, 5], delay=500, popup="剩余路径").add_to(m)
+                
+                # 5. 无人机当前位置
+                if st.session_state.drone_position:
+                    folium.Marker(st.session_state.drone_position,
+                                icon=folium.Icon(color='orange', icon='plane', prefix='fa'),
+                                popup=f"🚁 无人机当前位置<br>航点: {curr+1}/{total}<br>高度: {st.session_state.waypoints[min(curr,total-1)].alt if curr < total else 0}m").add_to(m)
+                    folium.Circle(st.session_state.drone_position, radius=15, color='orange', fill=True, fillOpacity=0.2).add_to(m)
+                    folium.Circle(st.session_state.drone_position, radius=30, color='yellow', fill=False, weight=1).add_to(m)
+                
+                st_folium(m, width=800, height=550, key=f"flight_map_{st.session_state.animation_step}")
+            
+            with col_info:
+                st.subheader("📊 实时信息")
+                
+                if st.session_state.drone_position:
+                    st.markdown("**📍 当前位置**")
+                    st.code(f"纬度: {st.session_state.drone_position[0]:.6f}\n经度: {st.session_state.drone_position[1]:.6f}")
+                
+                if curr < total:
+                    wp = st.session_state.waypoints[curr]
+                    st.markdown("**🎯 当前目标航点**")
+                    st.code(f"航点 #{curr+1}\n纬度: {wp.lat:.6f}\n经度: {wp.lon:.6f}\n高度: {wp.alt}m")
+                
+                if curr < total - 1:
+                    next_wp = st.session_state.waypoints[curr + 1]
+                    st.markdown("**➡️ 下一段航程**")
+                    dist = st.session_state.planner.haversine_distance(wp.lat, wp.lon, next_wp.lat, next_wp.lon)
+                    st.code(f"距离: {dist:.1f}m\n目标高度: {next_wp.alt}m")
+                
+                st.markdown("**📈 飞行统计**")
+                total_dist = 0
                 if len(st.session_state.flight_path_history) > 1:
-                    folium.PolyLine(st.session_state.flight_path_history, color='#00FF00', weight=6, opacity=0.9,
-                                   popup="已飞路径").add_to(m)
-                    
-                    # 飞行轨迹点
-                    for i in range(0, len(st.session_state.flight_path_history)-1, max(1, len(st.session_state.flight_path_history)//5)):
-                        folium.CircleMarker(st.session_state.flight_path_history[i], radius=2, color='lime', 
-                                          fill=True, fillOpacity=0.8).add_to(m)
-                
-                # 4. 剩余路径（亮蓝色动画线）
-                if curr < total - 1 and st.session_state.drone_position:
-                    remaining_path = [st.session_state.drone_position]
-                    for i in range(curr + 1, total):
-                        remaining_path.append([st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon])
-                    
-                    if len(remaining_path) > 1:
-                        AntPath(remaining_path, color='#00BFFF', weight=4, opacity=0.8,
-                               dash_array=[10, 5], delay=500, popup="剩余路径").add_to(m)
-            
-            # 5. 无人机当前位置
-            if st.session_state.drone_position:
-                folium.Marker(st.session_state.drone_position,
-                            icon=folium.Icon(color='orange', icon='plane', prefix='fa'),
-                            popup=f"🚁 无人机当前位置<br>航点: {curr+1}/{total}<br>高度: {st.session_state.waypoints[min(curr,total-1)].alt if curr < total else 0}m").add_to(m)
-                folium.Circle(st.session_state.drone_position, radius=15, color='orange', fill=True, fillOpacity=0.2).add_to(m)
-                folium.Circle(st.session_state.drone_position, radius=30, color='yellow', fill=False, weight=1).add_to(m)
-            
-            st_folium(m, width=800, height=550, key="flight_monitor_map")
-        
-        with col_info:
-            st.subheader("📊 实时信息")
-            
-            if st.session_state.drone_position:
-                st.markdown("**📍 当前位置**")
-                st.code(f"纬度: {st.session_state.drone_position[0]:.6f}\n经度: {st.session_state.drone_position[1]:.6f}")
-            
-            if curr < total:
-                wp = st.session_state.waypoints[curr]
-                st.markdown("**🎯 当前目标航点**")
-                st.code(f"航点 #{curr+1}\n纬度: {wp.lat:.6f}\n经度: {wp.lon:.6f}\n高度: {wp.alt}m")
-            
-            if curr < total - 1:
-                next_wp = st.session_state.waypoints[curr + 1]
-                st.markdown("**➡️ 下一段航程**")
-                dist = st.session_state.planner.haversine_distance(wp.lat, wp.lon, next_wp.lat, next_wp.lon)
-                st.code(f"距离: {dist:.1f}m\n目标高度: {next_wp.alt}m")
-            
-            st.markdown("**📈 飞行统计**")
-            total_dist = 0
-            if len(st.session_state.flight_path_history) > 1:
-                for i in range(1, len(st.session_state.flight_path_history)):
-                    total_dist += st.session_state.planner.haversine_distance(
-                        st.session_state.flight_path_history[i-1][0],
-                        st.session_state.flight_path_history[i-1][1],
-                        st.session_state.flight_path_history[i][0],
-                        st.session_state.flight_path_history[i][1]
-                    )
-            st.code(f"已飞距离: {total_dist:.1f}m\n预计剩余: {max(0, 100-prog)}%")
+                    for i in range(1, len(st.session_state.flight_path_history)):
+                        total_dist += st.session_state.planner.haversine_distance(
+                            st.session_state.flight_path_history[i-1][0],
+                            st.session_state.flight_path_history[i-1][1],
+                            st.session_state.flight_path_history[i][0],
+                            st.session_state.flight_path_history[i][1]
+                        )
+                st.code(f"已飞距离: {total_dist:.1f}m\n预计剩余: {max(0, 100-prog)}%")
         
         # ===== 飞行动画执行逻辑（放在最后，确保UI先渲染） =====
         if st.session_state.mission_executing and st.session_state.drone_position and curr < total - 1:
@@ -1681,20 +1754,43 @@ elif page == "✈️ 飞行监控":
             next_wp = st.session_state.waypoints[curr + 1]
             
             step = st.session_state.animation_step
-            total_steps = 10  # 每段分10步，每步约1秒
+            total_steps = 8  # 减少步数，降低刷新频率
             
             # 显示进度
-            st.progress(step / total_steps, text=f"飞往航点 {curr+2}/{total} - 步骤 {step}/{total_steps}")
+            progress_text = st.empty()
+            progress_text.progress(step / total_steps, text=f"飞往航点 {curr+2}/{total} - 步骤 {step}/{total_steps}")
             
             if step < total_steps:
-                r = step / total_steps
-                new_lat = curr_wp.lat + (next_wp.lat - curr_wp.lat) * r
-                new_lon = curr_wp.lon + (next_wp.lon - curr_wp.lon) * r
-                new_alt = curr_wp.alt + (next_wp.alt - curr_wp.alt) * r
+                t = step / total_steps  # 归一化时间 0-1
+                
+                # 使用二次贝塞尔曲线实现弧线飞行
+                mid_lat = (curr_wp.lat + next_wp.lat) / 2
+                mid_lon = (curr_wp.lon + next_wp.lon) / 2
+                
+                # 计算垂直方向（用于产生弧线效果）
+                dx = next_wp.lon - curr_wp.lon
+                dy = next_wp.lat - curr_wp.lat
+                length = math.sqrt(dx*dx + dy*dy)
+                
+                # 弧线偏移量
+                if length > 0:
+                    offset_factor = 0.0002  # 约20米的偏移
+                    perp_x = -dy / length * offset_factor
+                    perp_y = dx / length * offset_factor
+                    control_lat = mid_lat + perp_y
+                    control_lon = mid_lon + perp_x
+                else:
+                    control_lat = mid_lat
+                    control_lon = mid_lon
+                
+                # 二次贝塞尔曲线
+                r = 1 - t
+                new_lat = r*r * curr_wp.lat + 2*r*t * control_lat + t*t * next_wp.lat
+                new_lon = r*r * curr_wp.lon + 2*r*t * control_lon + t*t * next_wp.lon
+                new_alt = curr_wp.alt + (next_wp.alt - curr_wp.alt) * t
                 
                 st.session_state.drone_position = [new_lat, new_lon]
-                if step % 2 == 0:
-                    st.session_state.flight_path_history.append([new_lat, new_lon])
+                st.session_state.flight_path_history.append([new_lat, new_lon])
                 
                 # 记录遥测
                 current_time = time.time()
@@ -1711,13 +1807,14 @@ elif page == "✈️ 飞行监控":
                     st.session_state.flight_stats['last_telemetry_log'] = current_time
                 
                 st.session_state.animation_step += 1
-                time.sleep(1.0)  # 每步1秒，让用户能看清
+                time.sleep(1.2)  # 增加间隔，减少闪烁感
                 st.rerun()
             else:
                 # 完成当前航段
                 st.session_state.current_waypoint_index += 1
                 st.session_state.animation_step = 0
                 st.session_state.comm_logger.log_waypoint_reached(curr + 1, total)
+                progress_text.empty()  # 清除进度条
                 if st.session_state.current_waypoint_index >= total - 1:
                     st.session_state.comm_logger.log_flight_complete()
                     st.session_state.mission_executing = False
