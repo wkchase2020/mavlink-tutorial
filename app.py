@@ -1,4 +1,5 @@
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import time
 import math
 import heapq
@@ -561,6 +562,10 @@ class GridPathPlanner:
         best_path = None
         best_dist = float('inf')
         
+        # 计算起点到终点的方向，用于bias引导
+        dx_total = end_grid[0] - start_grid[0]
+        dy_total = end_grid[1] - start_grid[1]
+        
         while open_set and iteration < self.max_iterations:
             iteration += 1
             f_cost, g_cost, x, y, path = heapq.heappop(open_set)
@@ -616,7 +621,20 @@ class GridPathPlanner:
                 if new_key in visited and visited[new_key] <= new_g_cost:
                     continue
                 
-                h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
+                # 基础启发式：到终点的距离
+                h_base = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
+                
+                # 添加bias引导：左绕行鼓励向西(y减小)，右绕行鼓励向东(y增加)
+                # 假设x是东西方向（经度），y是南北方向（纬度）
+                h_bias = 0
+                if bias < 0:  # 左绕行：鼓励向西（y减小）
+                    # 惩罚向东走（y增加），奖励向西走
+                    h_bias = (ny - start_grid[1]) * self.grid_size * 0.3
+                elif bias > 0:  # 右绕行：鼓励向东（y增加）
+                    # 惩罚向西走，奖励向东走
+                    h_bias = (start_grid[1] - ny) * self.grid_size * 0.3
+                
+                h = h_base + h_bias
                 
                 heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
         
@@ -1043,9 +1061,21 @@ if page == "🗺️ 航线规划":
         # A点设置
         st.markdown("**📍 起点 A**")
         st.caption(f"输入坐标系: {st.session_state.coord_system}")
+        
+        # 默认坐标和一键填写
+        col_default_a, col_set_a = st.columns([1, 1])
+        with col_default_a:
+            if st.button("📝 填入默认A点", key="default_a", use_container_width=True):
+                st.session_state.lat_a_input = 32.2323
+                st.session_state.lon_a_input = 118.7496
+                st.rerun()
+        
         c1, c2 = st.columns(2)
         
-        default_lat_a, default_lon_a = 32.0603, 118.7969
+        # 优先使用session_state中的值（支持一键填入）
+        default_lat_a = st.session_state.get('lat_a_input', 32.2323 if st.session_state.point_a is None else None)
+        default_lon_a = st.session_state.get('lon_a_input', 118.7496 if st.session_state.point_a is None else None)
+        
         if st.session_state.point_a:
             lat_wgs, lon_wgs = st.session_state.point_a
             if st.session_state.coord_system == 'GCJ-02':
@@ -1054,8 +1084,8 @@ if page == "🗺️ 航线规划":
             else:
                 default_lat_a, default_lon_a = lat_wgs, lon_wgs
         
-        lat_a = c1.number_input("纬度", value=default_lat_a, format="%.6f", key="lat_a")
-        lon_a = c2.number_input("经度", value=default_lon_a, format="%.6f", key="lon_a")
+        lat_a = c1.number_input("纬度", value=default_lat_a if default_lat_a else 32.2323, format="%.6f", key="lat_a")
+        lon_a = c2.number_input("经度", value=default_lon_a if default_lon_a else 118.7496, format="%.6f", key="lon_a")
         
         if st.button("✅ 设置A点", key="set_a"):
             lat_wgs, lon_wgs = CoordinateConverter.from_user_input(lat_a, lon_a, st.session_state.coord_system)
@@ -1065,9 +1095,21 @@ if page == "🗺️ 航线规划":
         
         # B点设置
         st.markdown("**📍 终点 B**")
+        
+        # 默认坐标和一键填写
+        col_default_b, col_set_b = st.columns([1, 1])
+        with col_default_b:
+            if st.button("📝 填入默认B点", key="default_b", use_container_width=True):
+                st.session_state.lat_b_input = 32.2344
+                st.session_state.lon_b_input = 118.7493
+                st.rerun()
+        
         c3, c4 = st.columns(2)
         
-        default_lat_b, default_lon_b = 32.0703, 118.8069
+        # 优先使用session_state中的值（支持一键填入）
+        default_lat_b = st.session_state.get('lat_b_input', 32.2344 if st.session_state.point_b is None else None)
+        default_lon_b = st.session_state.get('lon_b_input', 118.7493 if st.session_state.point_b is None else None)
+        
         if st.session_state.point_b:
             lat_wgs, lon_wgs = st.session_state.point_b
             if st.session_state.coord_system == 'GCJ-02':
@@ -1076,8 +1118,8 @@ if page == "🗺️ 航线规划":
             else:
                 default_lat_b, default_lon_b = lat_wgs, lon_wgs
         
-        lat_b = c3.number_input("纬度", value=default_lat_b, format="%.6f", key="lat_b")
-        lon_b = c4.number_input("经度", value=default_lon_b, format="%.6f", key="lon_b")
+        lat_b = c3.number_input("纬度", value=default_lat_b if default_lat_b else 32.2344, format="%.6f", key="lat_b")
+        lon_b = c4.number_input("经度", value=default_lon_b if default_lon_b else 118.7493, format="%.6f", key="lon_b")
         
         if st.button("✅ 设置B点", key="set_b"):
             lat_wgs, lon_wgs = CoordinateConverter.from_user_input(lat_b, lon_b, st.session_state.coord_system)
@@ -1440,17 +1482,22 @@ if page == "🗺️ 航线规划":
 elif page == "✈️ 飞行监控":
     st.title("✈️ 飞行监控 - 实时进程显示")
     
+    # 自动刷新：当任务执行中时，每300ms自动刷新
+    if st.session_state.mission_executing:
+        st_autorefresh(interval=300, limit=None, key="flight_autorefresh")
+    
     if not st.session_state.mission_sent:
         st.warning("请先规划并上传航线")
     else:
         # 控制按钮区域
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             if not st.session_state.mission_executing:
                 if st.button("▶️ 开始执行任务", type="primary", use_container_width=True):
                     st.session_state.mission_executing = True
                     st.session_state.current_waypoint_index = 0
+                    st.session_state.animation_step = 0
                     st.session_state.flight_path_history = []
                     st.session_state.flight_stats['start_time'] = time.time()
                     st.session_state.flight_stats['battery'] = 100
@@ -1489,6 +1536,7 @@ elif page == "✈️ 飞行监控":
                 st.session_state.mission_executing = False
                 st.session_state.drone_position = None
                 st.session_state.current_waypoint_index = 0
+                st.session_state.animation_step = 0
                 st.session_state.flight_path_history = []
                 st.session_state.flight_stats = {
                     'start_time': None,
@@ -1497,11 +1545,6 @@ elif page == "✈️ 飞行监控":
                     'speed': 0,
                     'last_telemetry_log': 0,
                 }
-                st.rerun()
-        
-        with col5:
-            # 手动刷新按钮，替代自动刷新
-            if st.button("🔄 刷新地图", use_container_width=True):
                 st.rerun()
         
         # 实时状态显示
@@ -1529,7 +1572,7 @@ elif page == "✈️ 飞行监控":
             st.progress(prog)
             
             if st.session_state.mission_executing:
-                st.info(f"🚁 正在执行任务... 电池: {st.session_state.flight_stats['battery']}% | 点击「刷新地图」查看实时位置")
+                st.info(f"🚁 正在执行任务... 电池: {st.session_state.flight_stats['battery']}%")
             else:
                 st.warning("⏸️ 任务已暂停或待执行")
         
@@ -1635,56 +1678,51 @@ elif page == "✈️ 飞行监控":
                         st.session_state.flight_path_history[i][1]
                     )
             st.code(f"已飞距离: {total_dist:.1f}m\n预计剩余: {max(0, 100-prog)}%")
+        
+        # 飞行动画逻辑 - 在每次自动刷新时执行一小步
+        if st.session_state.mission_executing and st.session_state.drone_position and curr < total - 1:
+            curr_wp = st.session_state.waypoints[curr]
+            next_wp = st.session_state.waypoints[curr + 1]
             
-            # 执行飞行步骤（简化版，减少刷新）
-            if st.session_state.mission_executing and st.session_state.drone_position and curr < total - 1:
-                st.markdown("---")
-                st.info("💡 任务执行中，点击上方「刷新地图」按钮查看最新位置")
+            step = st.session_state.animation_step
+            total_steps = 20  # 每个航段分20步，更平滑
+            
+            if step < total_steps:
+                r = step / total_steps
+                new_lat = curr_wp.lat + (next_wp.lat - curr_wp.lat) * r
+                new_lon = curr_wp.lon + (next_wp.lon - curr_wp.lon) * r
+                new_alt = curr_wp.alt + (next_wp.alt - curr_wp.alt) * r
                 
-                # 执行一个航段（直接跳到下一个航点，减少中间刷新）
-                curr_wp = st.session_state.waypoints[curr]
-                next_wp = st.session_state.waypoints[curr + 1]
+                # 更新位置
+                st.session_state.drone_position = [new_lat, new_lon]
                 
-                # 添加中间点到历史路径
-                step = st.session_state.animation_step
-                total_steps = 5  # 减少步数
-                
-                if step < total_steps:
-                    r = step / total_steps
-                    new_lat = curr_wp.lat + (next_wp.lat - curr_wp.lat) * r
-                    new_lon = curr_wp.lon + (next_wp.lon - curr_wp.lon) * r
-                    new_alt = curr_wp.alt + (next_wp.alt - curr_wp.alt) * r
-                    
-                    st.session_state.drone_position = [new_lat, new_lon]
+                # 每5步记录一次路径历史（减少点数）
+                if step % 5 == 0 or step == total_steps - 1:
                     st.session_state.flight_path_history.append([new_lat, new_lon])
-                    
-                    # 定期记录遥测数据
-                    current_time = time.time()
-                    if current_time - st.session_state.flight_stats['last_telemetry_log'] > 3:
-                        st.session_state.comm_logger.log_telemetry(
-                            new_lat, new_lon, new_alt,
-                            st.session_state.flight_stats['speed'],
-                            st.session_state.flight_stats['battery'],
-                            curr + 1, total
-                        )
-                        st.session_state.flight_stats['last_telemetry_log'] = current_time
-                    
-                    st.session_state.animation_step += 1
-                    
-                    # 延迟后刷新（给用户时间看到变化）
-                    time.sleep(0.3)
-                    st.rerun()
-                else:
-                    st.session_state.current_waypoint_index += 1
-                    st.session_state.animation_step = 0
-                    
-                    # 记录到达航点
-                    st.session_state.comm_logger.log_waypoint_reached(curr + 1, total)
-                    
-                    if st.session_state.current_waypoint_index >= total - 1:
-                        st.session_state.comm_logger.log_flight_complete()
-                        st.session_state.mission_executing = False
-                        st.success("🎉 任务执行完成！")
+                
+                # 定期记录遥测数据
+                current_time = time.time()
+                if current_time - st.session_state.flight_stats['last_telemetry_log'] > 3:
+                    st.session_state.comm_logger.log_telemetry(
+                        new_lat, new_lon, new_alt,
+                        st.session_state.flight_stats['speed'],
+                        st.session_state.flight_stats['battery'],
+                        curr + 1, total
+                    )
+                    st.session_state.flight_stats['last_telemetry_log'] = current_time
+                
+                st.session_state.animation_step += 1
+            else:
+                # 完成当前航段，进入下一个
+                st.session_state.current_waypoint_index += 1
+                st.session_state.animation_step = 0
+                
+                # 记录到达航点
+                st.session_state.comm_logger.log_waypoint_reached(curr + 1, total)
+                
+                if st.session_state.current_waypoint_index >= total - 1:
+                    st.session_state.comm_logger.log_flight_complete()
+                    st.session_state.mission_executing = False
 
 
 # ==================== 通信日志页面 ====================
