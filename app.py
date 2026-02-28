@@ -769,7 +769,7 @@ init_session_state()
 # ==================== 侧边栏 ====================
 with st.sidebar:
     st.header("🧭 导航")
-    page = st.radio("功能页面", ["🗺️ 航线规划", "✈️ 飞行监控", "📡 通信日志"])
+    page = st.radio("功能页面", ["🗺️ 航线规划", "✈️ 飞行监控"])
     
     st.markdown("---")
     st.header("⚙️ 坐标系设置")
@@ -1468,7 +1468,7 @@ elif page == "✈️ 飞行监控":
                     
                     # 预计算所有飞行位置点
                     positions = []
-                    steps_per_segment = 15  # 每段15个点，平衡流畅度和性能
+                    steps_per_segment = 25  # 每段25个点，更流畅
                     for i in range(len(st.session_state.waypoints) - 1):
                         curr, next_wp = st.session_state.waypoints[i], st.session_state.waypoints[i + 1]
                         for step in range(steps_per_segment):
@@ -1525,8 +1525,8 @@ elif page == "✈️ 飞行监控":
             if idx < total_pos - 1:
                 old_wp_idx = st.session_state.current_waypoint_index
                 st.session_state.drone_pos_index += 1
-                # 计算当前航点索引 (steps_per_segment=15)
-                new_wp_idx = min(st.session_state.drone_pos_index // 15, total_wp - 1)
+                # 计算当前航点索引 (steps_per_segment=25)
+                new_wp_idx = min(st.session_state.drone_pos_index // 25, total_wp - 1)
                 st.session_state.current_waypoint_index = new_wp_idx
                 # 更新drone_position和flight_path_history
                 st.session_state.drone_position = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
@@ -1536,18 +1536,27 @@ elif page == "✈️ 飞行监控":
                 if new_wp_idx > old_wp_idx and new_wp_idx < total_wp:
                     timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
                     st.session_state.comm_logger.log_waypoint_reached(new_wp_idx, total_wp)
+                    # 完整的通信链路日志
+                    st.session_state.send_log.append(f"[{timestamp}] GCS→FCU: WP_ACK #{new_wp_idx}")
                     st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: WP_REACHED #{new_wp_idx}")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: TELEMETRY lat={st.session_state.drone_position[0]:.6f} lon={st.session_state.drone_position[1]:.6f} alt={st.session_state.waypoints[new_wp_idx].alt}")
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: TELEMETRY lat={st.session_state.drone_position[0]:.6f} lon={st.session_state.drone_position[1]:.6f} alt={st.session_state.waypoints[new_wp_idx].alt} spd=8.5")
                 
-                # 0.2秒刷新，5fps，更稳定不闪烁
-                time.sleep(0.2)
+                # 每5步记录一次遥测数据
+                if st.session_state.drone_pos_index % 5 == 0:
+                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                    pos = st.session_state.drone_position
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: HEARTBEAT lat={pos[0]:.6f} lon={pos[1]:.6f} bat=87%")
+                
+                # 0.08秒刷新，约12fps，更流畅
+                time.sleep(0.08)
                 st.rerun()
             else:
                 st.session_state.mission_executing = False
                 st.session_state.comm_logger.log_flight_complete()
                 timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                st.session_state.send_log.append(f"[{timestamp}] GCS→FCU: CMD_LAND")
                 st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: MISSION_COMPLETE")
-                st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: STATUS Disarmed | Mode: LOITER")
+                st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: STATUS Disarmed | Mode: LOITER | WP: {total_wp}/{total_wp}")
                 st.success("🎉 任务执行完成！")
         
         # 状态显示 - 两列布局：地图 + 日志
@@ -1609,43 +1618,68 @@ elif page == "✈️ 飞行监控":
             folium.CircleMarker(drone_pos, radius=8, color='orange', fill=True, fillOpacity=0.9).add_to(m)
             folium.Marker(drone_pos, icon=folium.Icon(color='orange', icon='plane', prefix='fa', icon_color='white')).add_to(m)
             
+            # 安全半径圆圈（根据设置的safety_margin）
+            safety_m = st.session_state.planner.safety_margin
+            folium.Circle(
+                drone_pos, 
+                radius=safety_m, 
+                color='orange', 
+                fill=True, 
+                fillOpacity=0.15,
+                popup=f"安全半径: {safety_m}m"
+            ).add_to(m)
+            
             # 渲染地图 - 使用固定key减少重建
             st_folium(m, width=700, height=500, key="flight_monitor_map")
         
-        # 右侧：通信日志面板（合并MAVLink日志）
+        # 右侧：通信日志面板
         with log_col:
-            st.subheader("📡 通信链路日志")
+            st.subheader("📡 通信链路")
             
-            # Tab切换：链路日志 | MAVLink原始日志
-            log_tab1, log_tab2 = st.tabs(["🔄 链路状态", "📋 MAVLink原始"])
+            # Tab切换：业务流程 | MAVLink收发
+            log_tab1, log_tab2 = st.tabs(["🔄 业务流程", "📡 MAVLink收发"])
             
             with log_tab1:
                 logs = st.session_state.comm_logger.get_logs()
-                log_html = "<div style='max-height:400px;overflow-y:auto;font-family:monospace;font-size:12px;background:#f8f9fa;padding:10px;border-radius:5px;'>"
-                for log in reversed(logs[-20:]):
+                log_html = "<div style='max-height:380px;overflow-y:auto;font-family:monospace;font-size:11px;background:#f8f9fa;padding:8px;border-radius:5px;'>"
+                for log in reversed(logs[-15:]):
                     bg_color = {"success": "#d4edda", "error": "#f8d7da", "warning": "#fff3cd", "info": "#e7f3ff"}.get(log['status'], "#f8f9fa")
-                    log_html += f"<div style='padding:5px;margin:2px 0;border-radius:3px;background:{bg_color};border-left:3px solid {'#28a745' if log['status']=='success' else '#dc3545' if log['status']=='error' else '#ffc107'}'>"
-                    log_html += f"<span style='color:#666;font-size:10px'>[{log['timestamp']}]</span> "
+                    border_color = {"success": "#28a745", "error": "#dc3545", "warning": "#ffc107", "info": "#17a2b8"}.get(log['status'], "#6c757d")
+                    log_html += f"<div style='padding:4px;margin:2px 0;border-radius:3px;background:{bg_color};border-left:3px solid {border_color}'>"
+                    log_html += f"<span style='color:#666;font-size:9px'>[{log['timestamp']}]</span> "
                     log_html += f"{log['icon']} <b>{log['msg_type']}</b><br>"
                     log_html += f"<span style='color:#333'>{log['content']}</span><br>"
-                    log_html += f"<small style='color:#888'>{log['direction']}</small>"
+                    log_html += f"<small style='color:#666'>{log['direction']}</small>"
                     log_html += f"</div>"
                 log_html += "</div>"
                 st.html(log_html)
                 
-                if st.button("🗑️ 清除链路日志"):
+                if st.button("🗑️ 清除日志", key="clear_comm_log"):
                     st.session_state.comm_logger.clear()
                     st.rerun()
             
             with log_tab2:
-                st.markdown("**📤 发送日志**")
+                # MAVLink发送日志
+                st.markdown("<small style='color:#0066cc'>📤 GCS → FCU (发送)</small>", unsafe_allow_html=True)
+                send_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#e7f3ff;padding:5px;border-radius:3px;'>"
                 if st.session_state.send_log:
-                    for log in list(st.session_state.send_log)[-10:]:
-                        st.text(f"{log}")
+                    for log in list(st.session_state.send_log)[-8:]:
+                        send_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
                 else:
-                    st.info("暂无发送记录")
+                    send_html += "<div style='color:#999'>暂无发送记录</div>"
+                send_html += "</div>"
+                st.html(send_html)
                 
-                st.markdown("**📥 接收日志**")
+                # MAVLink接收日志
+                st.markdown("<small style='color:#cc6600'>📥 FCU → GCS (接收)</small>", unsafe_allow_html=True)
+                recv_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:5px;border-radius:3px;'>"
+                if st.session_state.recv_log:
+                    for log in list(st.session_state.recv_log)[-8:]:
+                        recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
+                else:
+                    recv_html += "<div style='color:#999'>暂无接收记录</div>"
+                recv_html += "</div>"
+                st.html(recv_html)
                 if st.session_state.recv_log:
                     for log in list(st.session_state.recv_log)[-10:]:
                         st.text(f"{log}")
@@ -1653,37 +1687,7 @@ elif page == "✈️ 飞行监控":
                     st.info("暂无接收记录")
 
 
-# ==================== 通信日志页面 ====================
-elif page == "📡 通信日志":
-    st.title("📡 MAVLink通信日志")
-    st.info("💡 通信日志已合并到飞行监控页面，请切换到 ✈️ 飞行监控 查看完整通信记录")
-    
-    # 显示简化的MAVLink原始日志
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📤 发送日志 (MAVLink)")
-        if st.session_state.send_log:
-            for log in list(st.session_state.send_log)[-20:]:
-                st.text(f"{log}")
-        else:
-            st.info("暂无发送记录")
-        
-        if st.button("🗑️ 清空发送日志"):
-            st.session_state.send_log.clear()
-            st.rerun()
-    
-    with col2:
-        st.subheader("📥 接收日志 (MAVLink)")
-        if st.session_state.recv_log:
-            for log in list(st.session_state.recv_log)[-20:]:
-                st.text(f"{log}")
-        else:
-            st.info("暂无接收记录")
-        
-        if st.button("🗑️ 清空接收日志"):
-            st.session_state.recv_log.clear()
-            st.rerun()
+
 
 st.markdown("---")
 st.caption("MAVLink GCS v6.0 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
