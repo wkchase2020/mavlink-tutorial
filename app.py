@@ -916,7 +916,8 @@ if page == "🗺️ 航线规划":
         else:
             center = st.session_state.map_center
         
-        m = folium.Map(location=center, zoom_start=16, tiles="CartoDB positron")
+        # 使用 OpenStreetMap 作为默认底图（更稳定）
+        m = folium.Map(location=center, zoom_start=16, tiles="OpenStreetMap")
         
         Draw(
             draw_options={
@@ -1572,7 +1573,8 @@ elif page == "✈️ 飞行监控":
                 else:
                     center = st.session_state.map_center
                 
-                m = folium.Map(location=center, zoom_start=17, tiles="CartoDB dark_matter")
+                # 使用 OpenStreetMap 作为默认底图（更稳定）
+            m = folium.Map(location=center, zoom_start=17, tiles="OpenStreetMap")
                 
                 folium.TileLayer(
                     tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
