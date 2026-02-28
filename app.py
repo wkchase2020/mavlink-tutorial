@@ -1065,30 +1065,31 @@ if page == "🗺️ 航线规划":
         st.markdown("**📍 起点 A**")
         st.caption(f"输入坐标系: {st.session_state.coord_system}")
         
-        # 默认坐标和一键填写
-        col_default_a, col_set_a = st.columns([1, 1])
+        # 默认坐标和一键填写（小按钮放在右侧）
+        col_input_a, col_default_a = st.columns([4, 1])
         with col_default_a:
-            if st.button("📝 填入默认A点", key="default_a", use_container_width=True):
+            if st.button("⌗", key="default_a", help="填入默认A点(32.2323, 118.7496)"):
                 st.session_state.lat_a_input = 32.2323
                 st.session_state.lon_a_input = 118.7496
                 st.rerun()
         
-        c1, c2 = st.columns(2)
-        
-        # 优先使用session_state中的值（支持一键填入）
-        default_lat_a = st.session_state.get('lat_a_input', 32.2323 if st.session_state.point_a is None else None)
-        default_lon_a = st.session_state.get('lon_a_input', 118.7496 if st.session_state.point_a is None else None)
-        
-        if st.session_state.point_a:
-            lat_wgs, lon_wgs = st.session_state.point_a
-            if st.session_state.coord_system == 'GCJ-02':
-                lat_gcj, lon_gcj = CoordinateConverter.wgs84_to_gcj02(lat_wgs, lon_wgs)
-                default_lat_a, default_lon_a = lat_gcj, lon_gcj
-            else:
-                default_lat_a, default_lon_a = lat_wgs, lon_wgs
-        
-        lat_a = c1.number_input("纬度", value=default_lat_a if default_lat_a else 32.2323, format="%.6f", key="lat_a")
-        lon_a = c2.number_input("经度", value=default_lon_a if default_lon_a else 118.7496, format="%.6f", key="lon_a")
+        with col_input_a:
+            c1, c2 = st.columns(2)
+            
+            # 优先使用session_state中的值（支持一键填入）
+            default_lat_a = st.session_state.get('lat_a_input', 32.2323 if st.session_state.point_a is None else None)
+            default_lon_a = st.session_state.get('lon_a_input', 118.7496 if st.session_state.point_a is None else None)
+            
+            if st.session_state.point_a:
+                lat_wgs, lon_wgs = st.session_state.point_a
+                if st.session_state.coord_system == 'GCJ-02':
+                    lat_gcj, lon_gcj = CoordinateConverter.wgs84_to_gcj02(lat_wgs, lon_wgs)
+                    default_lat_a, default_lon_a = lat_gcj, lon_gcj
+                else:
+                    default_lat_a, default_lon_a = lat_wgs, lon_wgs
+            
+            lat_a = c1.number_input("纬度", value=default_lat_a if default_lat_a else 32.2323, format="%.6f", key="lat_a")
+            lon_a = c2.number_input("经度", value=default_lon_a if default_lon_a else 118.7496, format="%.6f", key="lon_a")
         
         if st.button("✅ 设置A点", key="set_a"):
             lat_wgs, lon_wgs = CoordinateConverter.from_user_input(lat_a, lon_a, st.session_state.coord_system)
@@ -1099,30 +1100,31 @@ if page == "🗺️ 航线规划":
         # B点设置
         st.markdown("**📍 终点 B**")
         
-        # 默认坐标和一键填写
-        col_default_b, col_set_b = st.columns([1, 1])
+        # 默认坐标和一键填写（小按钮放在右侧）
+        col_input_b, col_default_b = st.columns([4, 1])
         with col_default_b:
-            if st.button("📝 填入默认B点", key="default_b", use_container_width=True):
+            if st.button("⌗", key="default_b", help="填入默认B点(32.2344, 118.7493)"):
                 st.session_state.lat_b_input = 32.2344
                 st.session_state.lon_b_input = 118.7493
                 st.rerun()
         
-        c3, c4 = st.columns(2)
-        
-        # 优先使用session_state中的值（支持一键填入）
-        default_lat_b = st.session_state.get('lat_b_input', 32.2344 if st.session_state.point_b is None else None)
-        default_lon_b = st.session_state.get('lon_b_input', 118.7493 if st.session_state.point_b is None else None)
-        
-        if st.session_state.point_b:
-            lat_wgs, lon_wgs = st.session_state.point_b
-            if st.session_state.coord_system == 'GCJ-02':
-                lat_gcj, lon_gcj = CoordinateConverter.wgs84_to_gcj02(lat_wgs, lon_wgs)
-                default_lat_b, default_lon_b = lat_gcj, lon_gcj
-            else:
-                default_lat_b, default_lon_b = lat_wgs, lon_wgs
-        
-        lat_b = c3.number_input("纬度", value=default_lat_b if default_lat_b else 32.2344, format="%.6f", key="lat_b")
-        lon_b = c4.number_input("经度", value=default_lon_b if default_lon_b else 118.7493, format="%.6f", key="lon_b")
+        with col_input_b:
+            c3, c4 = st.columns(2)
+            
+            # 优先使用session_state中的值（支持一键填入）
+            default_lat_b = st.session_state.get('lat_b_input', 32.2344 if st.session_state.point_b is None else None)
+            default_lon_b = st.session_state.get('lon_b_input', 118.7493 if st.session_state.point_b is None else None)
+            
+            if st.session_state.point_b:
+                lat_wgs, lon_wgs = st.session_state.point_b
+                if st.session_state.coord_system == 'GCJ-02':
+                    lat_gcj, lon_gcj = CoordinateConverter.wgs84_to_gcj02(lat_wgs, lon_wgs)
+                    default_lat_b, default_lon_b = lat_gcj, lon_gcj
+                else:
+                    default_lat_b, default_lon_b = lat_wgs, lon_wgs
+            
+            lat_b = c3.number_input("纬度", value=default_lat_b if default_lat_b else 32.2344, format="%.6f", key="lat_b")
+            lon_b = c4.number_input("经度", value=default_lon_b if default_lon_b else 118.7493, format="%.6f", key="lon_b")
         
         if st.button("✅ 设置B点", key="set_b"):
             lat_wgs, lon_wgs = CoordinateConverter.from_user_input(lat_b, lon_b, st.session_state.coord_system)
@@ -1763,30 +1765,9 @@ elif page == "✈️ 飞行监控":
             if step < total_steps:
                 t = step / total_steps  # 归一化时间 0-1
                 
-                # 使用二次贝塞尔曲线实现弧线飞行
-                mid_lat = (curr_wp.lat + next_wp.lat) / 2
-                mid_lon = (curr_wp.lon + next_wp.lon) / 2
-                
-                # 计算垂直方向（用于产生弧线效果）
-                dx = next_wp.lon - curr_wp.lon
-                dy = next_wp.lat - curr_wp.lat
-                length = math.sqrt(dx*dx + dy*dy)
-                
-                # 弧线偏移量
-                if length > 0:
-                    offset_factor = 0.0002  # 约20米的偏移
-                    perp_x = -dy / length * offset_factor
-                    perp_y = dx / length * offset_factor
-                    control_lat = mid_lat + perp_y
-                    control_lon = mid_lon + perp_x
-                else:
-                    control_lat = mid_lat
-                    control_lon = mid_lon
-                
-                # 二次贝塞尔曲线
-                r = 1 - t
-                new_lat = r*r * curr_wp.lat + 2*r*t * control_lat + t*t * next_wp.lat
-                new_lon = r*r * curr_wp.lon + 2*r*t * control_lon + t*t * next_wp.lon
+                # 直线飞行：按航线节点直线插值
+                new_lat = curr_wp.lat + (next_wp.lat - curr_wp.lat) * t
+                new_lon = curr_wp.lon + (next_wp.lon - curr_wp.lon) * t
                 new_alt = curr_wp.alt + (next_wp.alt - curr_wp.alt) * t
                 
                 st.session_state.drone_position = [new_lat, new_lon]
@@ -1807,7 +1788,7 @@ elif page == "✈️ 飞行监控":
                     st.session_state.flight_stats['last_telemetry_log'] = current_time
                 
                 st.session_state.animation_step += 1
-                time.sleep(1.2)  # 增加间隔，减少闪烁感
+                time.sleep(0.5)  # 较短的间隔，更连贯
                 st.rerun()
             else:
                 # 完成当前航段
