@@ -1574,7 +1574,7 @@ elif page == "✈️ 飞行监控":
                     center = st.session_state.map_center
                 
                 # 使用 OpenStreetMap 作为默认底图（更稳定）
-            m = folium.Map(location=center, zoom_start=17, tiles="OpenStreetMap")
+                m = folium.Map(location=center, zoom_start=17, tiles="OpenStreetMap")
                 
                 folium.TileLayer(
                     tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
