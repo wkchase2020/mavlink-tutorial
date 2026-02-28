@@ -423,7 +423,9 @@ class GridPathPlanner:
     def plan_horizontal_avoidance(self, start_wp, end_wp, bias=0):
         """
         【严格】强制水平绕行路径规划 - 绝不穿行
-        bias: 绕行偏向 (-1=左偏, 0=最优, 1=右偏)
+        bias: 绕行偏向 (-1=左偏/西侧, 0=最优, 1=右偏/东侧)
+        左偏(bias<0): 鼓励向西绕行 (x减小方向)
+        右偏(bias>0): 鼓励向东绕行 (x增大方向)
         """
         start = (start_wp.lat, start_wp.lon)
         end = (end_wp.lat, end_wp.lon)
@@ -445,9 +447,9 @@ class GridPathPlanner:
         # 根据偏向调整边界框（实现左右绕行）
         lat_range = lat_max - lat_min
         lon_range = lon_max - lon_min
-        if bias < 0:  # 左偏 - 扩展左侧边界
+        if bias < 0:  # 左偏 - 扩展西侧边界
             lon_min -= lon_range * 0.3
-        elif bias > 0:  # 右偏 - 扩展右侧边界
+        elif bias > 0:  # 右偏 - 扩展东侧边界
             lon_max += lon_range * 0.3
         
         base_lat = lat_min
@@ -536,8 +538,16 @@ class GridPathPlanner:
                 if new_key in visited and visited[new_key] <= new_g_cost:
                     continue
                 
-                # 启发式函数
+                # 启发式函数 - 基础距离
                 h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
+                
+                # 【关键】添加绕行偏向到启发函数
+                # bias < 0 (左偏/西): 鼓励向西走 (nx较小)
+                # bias > 0 (右偏/东): 鼓励向东走 (nx较大)
+                if bias < 0:  # 左绕行 - 优先选择西侧(x较小)的路径
+                    h += (nx - start_grid[0]) * self.grid_size * 0.3
+                elif bias > 0:  # 右绕行 - 优先选择东侧(x较大)的路径
+                    h += (start_grid[0] - nx) * self.grid_size * 0.3
                 
                 heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
         
@@ -746,6 +756,8 @@ def init_session_state():
         'all_flight_positions': [],
         'drone_pos_index': 0,
         'flight_start_time': None,
+        # 障碍物记忆
+        'saved_obstacles': [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1275,12 +1287,37 @@ if page == "🗺️ 航线规划":
                             st.rerun()
                 
                 st.markdown("---")
-                if st.button("🗑️ 清除全部障碍物", key="clear_all_obs"):
-                    st.session_state.planner.clear_obstacles()
-                    st.session_state.planned_path_horizontal = None
-                    st.session_state.planned_path_climb = None
-                    st.session_state.waypoints = []
-                    st.rerun()
+                col_clear, col_save, col_load = st.columns(3)
+                with col_clear:
+                    if st.button("🗑️ 清除全部", key="clear_all_obs"):
+                        st.session_state.planner.clear_obstacles()
+                        st.session_state.planned_path_horizontal = None
+                        st.session_state.planned_path_climb = None
+                        st.session_state.waypoints = []
+                        st.rerun()
+                with col_save:
+                    if st.button("💾 记忆障碍物", key="save_obstacles"):
+                        st.session_state.saved_obstacles = [{
+                            'type': o.type, 'points': o.points, 'height': o.height, 'name': o.name,
+                            'rotation': o.rotation, 'width': o.width, 'height_m': o.height_m, 
+                            'radius': getattr(o, 'radius', 30)
+                        } for o in st.session_state.planner.obstacles]
+                        st.success(f"✅ 已记忆 {len(st.session_state.saved_obstacles)} 个障碍物")
+                with col_load:
+                    if st.session_state.get('saved_obstacles') and st.button("🔄 恢复障碍物", key="load_obstacles"):
+                        st.session_state.planner.clear_obstacles()
+                        for o in st.session_state.saved_obstacles:
+                            if o['type'] == 'circle':
+                                st.session_state.planner.add_circle_obstacle(
+                                    o['points'][0][0], o['points'][0][1], o['radius'], o['height'], o['name'])
+                            elif o['type'] == 'rectangle':
+                                st.session_state.planner.add_rotated_rectangle_obstacle(
+                                    o['points'][0][0], o['points'][0][1], o['width'], o['height_m'], 
+                                    o['rotation'], o['height'], o['name'])
+                            else:
+                                st.session_state.planner.add_polygon_obstacle(o['points'], o['height'], o['name'])
+                        st.success(f"✅ 已恢复 {len(st.session_state.saved_obstacles)} 个障碍物")
+                        st.rerun()
         
         st.markdown("---")
         
@@ -1313,6 +1350,10 @@ if page == "🗺️ 航线规划":
                 st.session_state.comm_logger.log_path_planning_start(
                     "A*", len(st.session_state.planner.obstacles)
                 )
+                
+                # 记录MAVLink发送日志
+                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: NAV_TARGET ({st.session_state.point_a[0]:.6f}, {st.session_state.point_a[1]:.6f}) → ({st.session_state.point_b[0]:.6f}, {st.session_state.point_b[1]:.6f})")
                 
                 with st.spinner("🧭 正在规划多条路径..."):
                     all_paths = st.session_state.planner.plan_multiple_paths(
@@ -1373,6 +1414,14 @@ if page == "🗺️ 航线规划":
             if st.button("📤 上传到飞控", type="primary"):
                 st.session_state.mission_sent = True
                 st.session_state.comm_logger.log_mission_upload(len(st.session_state.waypoints))
+                
+                # 记录MAVLink发送日志
+                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_UPLOAD count={len(st.session_state.waypoints)}")
+                for i, wp in enumerate(st.session_state.waypoints):
+                    st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WAYPOINT #{i} lat={wp.lat:.6f} lon={wp.lon:.6f} alt={wp.alt}")
+                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_ACK ok")
+                
                 st.success(f"✅ 已上传 {len(st.session_state.waypoints)} 个航点到飞控")
                 st.balloons()
 
@@ -1440,6 +1489,13 @@ elif page == "✈️ 飞行监控":
                         ]
                     
                     st.session_state.comm_logger.log_flight_start()
+                    
+                    # 记录MAVLink日志
+                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                    st.session_state.send_log.append(f"[{timestamp}] GCS→FCU: CMD_MISSION_START")
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: ACK MISSION_START accepted")
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: STATUS Armed | Mode: AUTO | WP: 0/{len(st.session_state.waypoints)}")
+                    
                     st.rerun()
             else:
                 st.button("⏳ 任务执行中...", disabled=True, use_container_width=True)
@@ -1464,20 +1520,34 @@ elif page == "✈️ 飞行监控":
         if st.session_state.mission_executing and st.session_state.all_flight_positions:
             idx = st.session_state.drone_pos_index
             total_pos = len(st.session_state.all_flight_positions)
+            total_wp = len(st.session_state.waypoints)
             
             if idx < total_pos - 1:
+                old_wp_idx = st.session_state.current_waypoint_index
                 st.session_state.drone_pos_index += 1
                 # 计算当前航点索引 (steps_per_segment=15)
-                st.session_state.current_waypoint_index = min(st.session_state.drone_pos_index // 15, total - 1)
+                new_wp_idx = min(st.session_state.drone_pos_index // 15, total_wp - 1)
+                st.session_state.current_waypoint_index = new_wp_idx
                 # 更新drone_position和flight_path_history
                 st.session_state.drone_position = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
                 st.session_state.flight_path_history = st.session_state.all_flight_positions[:st.session_state.drone_pos_index+1]
-                # 0.12秒刷新，约8fps，流畅但不闪烁
-                time.sleep(0.12)
+                
+                # 记录航点到达日志
+                if new_wp_idx > old_wp_idx and new_wp_idx < total_wp:
+                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                    st.session_state.comm_logger.log_waypoint_reached(new_wp_idx, total_wp)
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: WP_REACHED #{new_wp_idx}")
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: TELEMETRY lat={st.session_state.drone_position[0]:.6f} lon={st.session_state.drone_position[1]:.6f} alt={st.session_state.waypoints[new_wp_idx].alt}")
+                
+                # 0.2秒刷新，5fps，更稳定不闪烁
+                time.sleep(0.2)
                 st.rerun()
             else:
                 st.session_state.mission_executing = False
                 st.session_state.comm_logger.log_flight_complete()
+                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: MISSION_COMPLETE")
+                st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: STATUS Disarmed | Mode: LOITER")
                 st.success("🎉 任务执行完成！")
         
         # 状态显示 - 两列布局：地图 + 日志
@@ -1502,77 +1572,99 @@ elif page == "✈️ 飞行监控":
                 elif st.session_state.drone_position:
                     st.warning("⏸️ 任务已暂停")
             
-            # 地图显示
+            # 地图显示 - 优化版本
             if st.session_state.all_flight_positions and st.session_state.drone_pos_index < len(st.session_state.all_flight_positions):
                 drone_pos = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
             else:
-                # 修复：waypoints[0] 是 Waypoint 对象，需要转换为 [lat, lon]
                 if st.session_state.waypoints:
                     first_wp = st.session_state.waypoints[0]
                     drone_pos = [first_wp.lat, first_wp.lon]
                 else:
                     drone_pos = [32.0603, 118.7969]
             
-            m = folium.Map(location=drone_pos, zoom_start=17, tiles="CartoDB dark_matter")
+            # 使用 OpenStreetMap（加载更快更稳定）
+            m = folium.Map(location=drone_pos, zoom_start=17, tiles="OpenStreetMap")
             
-            # 计划航线
             if st.session_state.waypoints:
+                # 计划航线（灰色虚线）
                 path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
-                folium.PolyLine(path_coords, color='blue', weight=3, opacity=0.4, dash_array='5,10').add_to(m)
+                folium.PolyLine(path_coords, color='gray', weight=2, opacity=0.5, dash_array='5,10').add_to(m)
                 
-                # 航点
+                # 航点 - 简化显示
                 for i, wp in enumerate(st.session_state.waypoints):
                     if i == 0:
-                        folium.Marker([wp.lat, wp.lon], icon=folium.Icon(color='green', icon='play', prefix='glyphicon')).add_to(m)
+                        folium.Marker([wp.lat, wp.lon], icon=folium.Icon(color='green', icon='play', prefix='glyphicon', icon_color='white')).add_to(m)
                     elif i == len(st.session_state.waypoints) - 1:
-                        folium.Marker([wp.lat, wp.lon], icon=folium.Icon(color='red', icon='stop', prefix='glyphicon')).add_to(m)
+                        folium.Marker([wp.lat, wp.lon], icon=folium.Icon(color='red', icon='stop', prefix='glyphicon', icon_color='white')).add_to(m)
                     else:
-                        color = 'blue' if i > curr else 'gray'
-                        folium.CircleMarker([wp.lat, wp.lon], radius=4, color=color, fill=True).add_to(m)
+                        color = 'blue' if i > curr else 'lightgray'
+                        folium.CircleMarker([wp.lat, wp.lon], radius=3, color=color, fill=True, fillOpacity=0.7).add_to(m)
                 
-                # 已飞路径
+                # 已飞路径（绿色实线）
                 if st.session_state.drone_pos_index > 0:
                     flown_path = st.session_state.all_flight_positions[:st.session_state.drone_pos_index+1]
-                    folium.PolyLine(flown_path, color='#00FF00', weight=5, opacity=0.9).add_to(m)
+                    folium.PolyLine(flown_path, color='#00AA00', weight=4, opacity=0.9).add_to(m)
             
-            # 无人机当前位置
-            folium.Marker(drone_pos, icon=folium.Icon(color='orange', icon='plane', prefix='fa')).add_to(m)
-            folium.Circle(drone_pos, radius=10, color='orange', fill=True, fillOpacity=0.3).add_to(m)
+            # 无人机当前位置 - 使用圆圈+标记
+            folium.CircleMarker(drone_pos, radius=8, color='orange', fill=True, fillOpacity=0.9).add_to(m)
+            folium.Marker(drone_pos, icon=folium.Icon(color='orange', icon='plane', prefix='fa', icon_color='white')).add_to(m)
             
-            # 使用动态key避免完全重建
-            st_folium(m, width=700, height=500, key=f"flight_map_{st.session_state.drone_pos_index}")
+            # 渲染地图 - 使用固定key减少重建
+            st_folium(m, width=700, height=500, key="flight_monitor_map")
         
-        # 右侧：通信日志
+        # 右侧：通信日志面板（合并MAVLink日志）
         with log_col:
-            st.subheader("📡 实时通信日志")
-            logs = st.session_state.comm_logger.get_logs()
-            log_html = "<div style='max-height:500px;overflow-y:auto;font-family:monospace;font-size:12px;background:#f8f9fa;padding:10px;border-radius:5px;'>"
-            for log in reversed(logs[-20:]):
-                bg_color = {"success": "#d4edda", "error": "#f8d7da", "warning": "#fff3cd", "info": "#e7f3ff"}.get(log['status'], "#f8f9fa")
-                log_html += f"<div style='padding:5px;margin:2px 0;border-radius:3px;background:{bg_color};border-left:3px solid {'#28a745' if log['status']=='success' else '#dc3545' if log['status']=='error' else '#ffc107'}'>"
-                log_html += f"<span style='color:#666;font-size:10px'>[{log['timestamp']}]</span> "
-                log_html += f"{log['icon']} <b>{log['msg_type']}</b><br>"
-                log_html += f"<span style='color:#333'>{log['content']}</span><br>"
-                log_html += f"<small style='color:#888'>{log['direction']}</small>"
-                log_html += f"</div>"
-            log_html += "</div>"
-            st.html(log_html)
+            st.subheader("📡 通信链路日志")
             
-            if st.button("🗑️ 清除日志"):
-                st.session_state.comm_logger.clear()
-                st.rerun()
+            # Tab切换：链路日志 | MAVLink原始日志
+            log_tab1, log_tab2 = st.tabs(["🔄 链路状态", "📋 MAVLink原始"])
+            
+            with log_tab1:
+                logs = st.session_state.comm_logger.get_logs()
+                log_html = "<div style='max-height:400px;overflow-y:auto;font-family:monospace;font-size:12px;background:#f8f9fa;padding:10px;border-radius:5px;'>"
+                for log in reversed(logs[-20:]):
+                    bg_color = {"success": "#d4edda", "error": "#f8d7da", "warning": "#fff3cd", "info": "#e7f3ff"}.get(log['status'], "#f8f9fa")
+                    log_html += f"<div style='padding:5px;margin:2px 0;border-radius:3px;background:{bg_color};border-left:3px solid {'#28a745' if log['status']=='success' else '#dc3545' if log['status']=='error' else '#ffc107'}'>"
+                    log_html += f"<span style='color:#666;font-size:10px'>[{log['timestamp']}]</span> "
+                    log_html += f"{log['icon']} <b>{log['msg_type']}</b><br>"
+                    log_html += f"<span style='color:#333'>{log['content']}</span><br>"
+                    log_html += f"<small style='color:#888'>{log['direction']}</small>"
+                    log_html += f"</div>"
+                log_html += "</div>"
+                st.html(log_html)
+                
+                if st.button("🗑️ 清除链路日志"):
+                    st.session_state.comm_logger.clear()
+                    st.rerun()
+            
+            with log_tab2:
+                st.markdown("**📤 发送日志**")
+                if st.session_state.send_log:
+                    for log in list(st.session_state.send_log)[-10:]:
+                        st.text(f"{log}")
+                else:
+                    st.info("暂无发送记录")
+                
+                st.markdown("**📥 接收日志**")
+                if st.session_state.recv_log:
+                    for log in list(st.session_state.recv_log)[-10:]:
+                        st.text(f"{log}")
+                else:
+                    st.info("暂无接收记录")
 
 
 # ==================== 通信日志页面 ====================
 elif page == "📡 通信日志":
     st.title("📡 MAVLink通信日志")
+    st.info("💡 通信日志已合并到飞行监控页面，请切换到 ✈️ 飞行监控 查看完整通信记录")
     
+    # 显示简化的MAVLink原始日志
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📤 发送日志")
+        st.subheader("📤 发送日志 (MAVLink)")
         if st.session_state.send_log:
-            for log in list(st.session_state.send_log)[-10:]:
+            for log in list(st.session_state.send_log)[-20:]:
                 st.text(f"{log}")
         else:
             st.info("暂无发送记录")
@@ -1582,9 +1674,9 @@ elif page == "📡 通信日志":
             st.rerun()
     
     with col2:
-        st.subheader("📥 接收日志")
+        st.subheader("📥 接收日志 (MAVLink)")
         if st.session_state.recv_log:
-            for log in list(st.session_state.recv_log)[-10:]:
+            for log in list(st.session_state.recv_log)[-20:]:
                 st.text(f"{log}")
         else:
             st.info("暂无接收记录")
