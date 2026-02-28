@@ -1436,25 +1436,74 @@ elif page == "✈️ 飞行监控":
         total = len(st.session_state.waypoints)
         
         # 通信链路拓扑图
-        with st.expander("📡 通信链路拓扑", expanded=True):
-            topo_col = st.columns([1, 1.5, 1, 1.5, 1])
-            gcs_active = st.checkbox("🖥️ GCS", value=True, key="gcs_check", label_visibility="visible")
-            obc_active = st.checkbox("🧠 OBC", value=True, key="obc_check", label_visibility="visible")
-            fcu_active = st.checkbox("⚙️ FCU", value=True, key="fcu_check", label_visibility="visible")
+        with st.expander("📡 通信链路拓扑与数据流", expanded=True):
+            # 节点状态控制
+            status_cols = st.columns(3)
+            with status_cols[0]:
+                gcs_active = st.checkbox("🖥️ GCS 在线", value=True, key="gcs_check_v7")
+            with status_cols[1]:
+                obc_active = st.checkbox("🧠 OBC 在线", value=True, key="obc_check_v7")
+            with status_cols[2]:
+                fcu_active = st.checkbox("⚙️ FCU 在线", value=True, key="fcu_check_v7")
             
-            gcs_obc_status = "🟢" if gcs_active and obc_active else "⚪"
-            obc_fcu_status = "🟢" if obc_active and fcu_active else "⚪"
+            st.markdown("---")
             
-            with topo_col[0]:
-                st.markdown("<div style='text-align:center;padding:10px;background:#e8f4f8;border-radius:8px;'>🖥️ GCS<br><small>地面站</small></div>", unsafe_allow_html=True)
-            with topo_col[1]:
-                st.markdown(f"<div style='text-align:center;padding:25px 0;'><span style='font-size:20px'>{gcs_obc_status}</span><br><small>UDP</small></div>", unsafe_allow_html=True)
-            with topo_col[2]:
-                st.markdown("<div style='text-align:center;padding:10px;background:#fff4e6;border-radius:8px;'>🧠 OBC<br><small>机载计算机</small></div>", unsafe_allow_html=True)
-            with topo_col[3]:
-                st.markdown(f"<div style='text-align:center;padding:25px 0;'><span style='font-size:20px'>{obc_fcu_status}</span><br><small>MAVLink</small></div>", unsafe_allow_html=True)
-            with topo_col[4]:
-                st.markdown("<div style='text-align:center;padding:10px;background:#f0f0f0;border-radius:8px;'>⚙️ FCU<br><small>飞控</small></div>", unsafe_allow_html=True)
+            # 链路状态计算
+            gcs_obc_ok = gcs_active and obc_active
+            obc_fcu_ok = obc_active and fcu_active
+            gcs_fcu_ok = gcs_active and fcu_active
+            
+            gcs_obc_status = "🟢 已连接" if gcs_obc_ok else "🔴 断开"
+            obc_fcu_status = "🟢 已连接" if obc_fcu_ok else "🔴 断开"
+            gcs_fcu_status = "🟢 直连" if gcs_fcu_ok else "⚪ 未直连"
+            
+            # 拓扑图可视化
+            topo_html = """
+            <div style="background:#f8f9fa;padding:15px;border-radius:10px;margin:10px 0;">
+                <table style="width:100%;text-align:center;">
+                    <tr>
+                        <td style="width:20%;">
+                            <div style="background:#e3f2fd;padding:15px;border-radius:8px;border:2px solid #2196f3;">
+                                <div style="font-size:24px;">🖥️</div>
+                                <div style="font-weight:bold;">GCS</div>
+                                <div style="font-size:11px;color:#666;">地面站<br>192.168.1.100</div>
+                            </div>
+                        </td>
+                        <td style="width:15%;vertical-align:middle;">
+                            <div style="font-size:14px;color:#0066cc;">⬆⬇<br>UDP:14550</div>
+                            <div style="font-size:12px;padding:3px 8px;background:#e8f5e9;border-radius:10px;display:inline-block;">""" + gcs_obc_status + """</div>
+                        </td>
+                        <td style="width:20%;">
+                            <div style="background:#fff3e0;padding:15px;border-radius:8px;border:2px solid #ff9800;">
+                                <div style="font-size:24px;">🧠</div>
+                                <div style="font-weight:bold;">OBC</div>
+                                <div style="font-size:11px;color:#666;">机载计算机<br>Raspberry Pi 4</div>
+                            </div>
+                        </td>
+                        <td style="width:15%;vertical-align:middle;">
+                            <div style="font-size:14px;color:#e65100;">⬆⬇<br>MAVLink</div>
+                            <div style="font-size:12px;padding:3px 8px;background:#e8f5e9;border-radius:10px;display:inline-block;">""" + obc_fcu_status + """</div>
+                        </td>
+                        <td style="width:20%;">
+                            <div style="background:#f3e5f5;padding:15px;border-radius:8px;border:2px solid #9c27b0;">
+                                <div style="font-size:24px;">⚙️</div>
+                                <div style="font-weight:bold;">FCU</div>
+                                <div style="font-size:11px;color:#666;">飞控<br>PX4 / ArduPilot</div>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+                
+                <div style="margin-top:15px;padding:10px;background:#fff;border-radius:5px;font-size:12px;">
+                    <b>📊 链路统计：</b>
+                    <span style="margin-left:15px;">GCS↔OBC: """ + ("正常" if gcs_obc_ok else "异常") + """</span>
+                    <span style="margin-left:15px;">OBC↔FCU: """ + ("正常" if obc_fcu_ok else "异常") + """</span>
+                    <span style="margin-left:15px;">延迟: ~25ms</span>
+                    <span style="margin-left:15px;">丢包率: 0.1%</span>
+                </div>
+            </div>
+            """
+            st.html(topo_html)
         
         # 控制按钮
         col1, col2, col3 = st.columns(3)
@@ -1581,7 +1630,7 @@ elif page == "✈️ 飞行监控":
                 elif st.session_state.drone_position:
                     st.warning("⏸️ 任务已暂停")
             
-            # 地图显示 - 优化版本
+            # 地图显示 - 完整版本
             if st.session_state.all_flight_positions and st.session_state.drone_pos_index < len(st.session_state.all_flight_positions):
                 drone_pos = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
             else:
@@ -1591,46 +1640,66 @@ elif page == "✈️ 飞行监控":
                 else:
                     drone_pos = [32.0603, 118.7969]
             
-            # 使用 OpenStreetMap（加载更快更稳定）
+            # 创建地图 - 使用OpenStreetMap + 卫星图层
             m = folium.Map(location=drone_pos, zoom_start=17, tiles="OpenStreetMap")
+            
+            # 添加卫星图层
+            folium.TileLayer(
+                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attr='Esri',
+                name='🛰️ 卫星影像',
+                overlay=False,
+                control=True
+            ).add_to(m)
+            
+            # 添加图层控制
+            folium.LayerControl(position='topright').add_to(m)
             
             if st.session_state.waypoints:
                 # 计划航线（灰色虚线）
                 path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
-                folium.PolyLine(path_coords, color='gray', weight=2, opacity=0.5, dash_array='5,10').add_to(m)
+                folium.PolyLine(path_coords, color='gray', weight=2, opacity=0.5, dash_array='5,10', popup="计划航线").add_to(m)
                 
-                # 航点 - 简化显示
+                # 航点详细显示
                 for i, wp in enumerate(st.session_state.waypoints):
                     if i == 0:
-                        folium.Marker([wp.lat, wp.lon], icon=folium.Icon(color='green', icon='play', prefix='glyphicon', icon_color='white')).add_to(m)
+                        folium.Marker([wp.lat, wp.lon], 
+                            icon=folium.Icon(color='green', icon='play', prefix='glyphicon'),
+                            popup=f"🚁 起点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
                     elif i == len(st.session_state.waypoints) - 1:
-                        folium.Marker([wp.lat, wp.lon], icon=folium.Icon(color='red', icon='stop', prefix='glyphicon', icon_color='white')).add_to(m)
+                        folium.Marker([wp.lat, wp.lon], 
+                            icon=folium.Icon(color='red', icon='stop', prefix='glyphicon'),
+                            popup=f"🎯 终点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
                     else:
                         color = 'blue' if i > curr else 'lightgray'
-                        folium.CircleMarker([wp.lat, wp.lon], radius=3, color=color, fill=True, fillOpacity=0.7).add_to(m)
+                        folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True, fillOpacity=0.8,
+                            popup=f"航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
                 
-                # 已飞路径（绿色实线）
+                # 已飞路径（亮绿色实线）
                 if st.session_state.drone_pos_index > 0:
                     flown_path = st.session_state.all_flight_positions[:st.session_state.drone_pos_index+1]
-                    folium.PolyLine(flown_path, color='#00AA00', weight=4, opacity=0.9).add_to(m)
+                    folium.PolyLine(flown_path, color='#00FF00', weight=5, opacity=0.9, popup="已飞路径").add_to(m)
             
-            # 无人机当前位置 - 使用圆圈+标记
-            folium.CircleMarker(drone_pos, radius=8, color='orange', fill=True, fillOpacity=0.9).add_to(m)
-            folium.Marker(drone_pos, icon=folium.Icon(color='orange', icon='plane', prefix='fa', icon_color='white')).add_to(m)
+            # 无人机当前位置
+            folium.CircleMarker(drone_pos, radius=10, color='orange', fill=True, fillOpacity=0.9,
+                popup=f"🚁 无人机当前位置<br>({drone_pos[0]:.6f}, {drone_pos[1]:.6f})").add_to(m)
+            folium.Marker(drone_pos, 
+                icon=folium.Icon(color='orange', icon='plane', prefix='fa'),
+                popup="无人机").add_to(m)
             
-            # 安全半径圆圈（根据设置的safety_margin）
+            # 安全半径圆圈（实时更新）
             safety_m = st.session_state.planner.safety_margin
             folium.Circle(
                 drone_pos, 
                 radius=safety_m, 
                 color='orange', 
                 fill=True, 
-                fillOpacity=0.15,
-                popup=f"安全半径: {safety_m}m"
+                fillOpacity=0.2,
+                popup=f"🛡️ 安全半径: {safety_m}m"
             ).add_to(m)
             
-            # 渲染地图 - 使用固定key减少重建
-            st_folium(m, width=700, height=500, key="flight_monitor_map")
+            # 渲染地图
+            st_folium(m, width=750, height=550, key="flight_monitor_map")
         
         # 右侧：通信日志面板
         with log_col:
@@ -1680,11 +1749,6 @@ elif page == "✈️ 飞行监控":
                     recv_html += "<div style='color:#999'>暂无接收记录</div>"
                 recv_html += "</div>"
                 st.html(recv_html)
-                if st.session_state.recv_log:
-                    for log in list(st.session_state.recv_log)[-10:]:
-                        st.text(f"{log}")
-                else:
-                    st.info("暂无接收记录")
 
 
 
