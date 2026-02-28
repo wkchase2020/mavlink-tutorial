@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import time
 import math
 import heapq
@@ -1640,66 +1641,128 @@ elif page == "✈️ 飞行监控":
                 else:
                     drone_pos = [32.0603, 118.7969]
             
-            # 创建地图 - 使用OpenStreetMap + 卫星图层
-            m = folium.Map(location=drone_pos, zoom_start=17, tiles="OpenStreetMap")
+            # 使用 JavaScript/Leaflet 实现流畅动画
+            import json
             
-            # 添加卫星图层
-            folium.TileLayer(
-                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                attr='Esri',
-                name='🛰️ 卫星影像',
-                overlay=False,
-                control=True
-            ).add_to(m)
-            
-            # 添加图层控制
-            folium.LayerControl(position='topright').add_to(m)
-            
+            # 准备航点数据
+            waypoints_data = []
             if st.session_state.waypoints:
-                # 计划航线（灰色虚线）
-                path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
-                folium.PolyLine(path_coords, color='gray', weight=2, opacity=0.5, dash_array='5,10', popup="计划航线").add_to(m)
-                
-                # 航点详细显示
                 for i, wp in enumerate(st.session_state.waypoints):
-                    if i == 0:
-                        folium.Marker([wp.lat, wp.lon], 
-                            icon=folium.Icon(color='green', icon='play', prefix='glyphicon'),
-                            popup=f"🚁 起点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
-                    elif i == len(st.session_state.waypoints) - 1:
-                        folium.Marker([wp.lat, wp.lon], 
-                            icon=folium.Icon(color='red', icon='stop', prefix='glyphicon'),
-                            popup=f"🎯 终点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
-                    else:
-                        color = 'blue' if i > curr else 'lightgray'
-                        folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True, fillOpacity=0.8,
-                            popup=f"航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
+                    waypoints_data.append({
+                        'lat': wp.lat, 
+                        'lon': wp.lon, 
+                        'alt': wp.alt, 
+                        'idx': i,
+                        'is_start': i == 0,
+                        'is_end': i == len(st.session_state.waypoints) - 1
+                    })
+            
+            # 预计算路径点
+            path_data = st.session_state.all_flight_positions if st.session_state.all_flight_positions else []
+            current_idx = st.session_state.drone_pos_index
+            is_executing = st.session_state.mission_executing
+            safety_radius = st.session_state.planner.safety_margin
+            
+            # 构建 JavaScript 地图
+            map_html = f'''
+            <div id="flight-map" style="width:100%;height:550px;border-radius:8px;"></div>
+            <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+            <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+            <script>
+                // 航点数据
+                const waypoints = {json.dumps(waypoints_data)};
+                const pathPoints = {json.dumps(path_data)};
+                const currentIndex = {current_idx};
+                const isExecuting = {str(is_executing).lower()};
+                const safetyRadius = {safety_radius};
                 
-                # 已飞路径（亮绿色实线）
-                if st.session_state.drone_pos_index > 0:
-                    flown_path = st.session_state.all_flight_positions[:st.session_state.drone_pos_index+1]
-                    folium.PolyLine(flown_path, color='#00FF00', weight=5, opacity=0.9, popup="已飞路径").add_to(m)
+                // 初始化地图
+                const map = L.map('flight-map').setView([{drone_pos[0]}, {drone_pos[1]}], 17);
+                
+                // 添加底图
+                L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                    attribution: '© OpenStreetMap'
+                }}).addTo(map);
+                
+                // 添加卫星图层切换
+                const baseLayers = {{
+                    "街道": L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'),
+                    "卫星": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}')
+                }};
+                baseLayers["街道"].addTo(map);
+                L.control.layers(baseLayers).addTo(map);
+                
+                // 绘制计划航线
+                if (waypoints.length > 0) {{
+                    const planCoords = waypoints.map(wp => [wp.lat, wp.lon]);
+                    L.polyline(planCoords, {{color: 'gray', weight: 2, opacity: 0.5, dashArray: '5,10'}}).addTo(map);
+                    
+                    // 绘制航点
+                    waypoints.forEach((wp, i) => {{
+                        let color = i === 0 ? 'green' : (i === waypoints.length - 1 ? 'red' : (i > currentIndex/25 ? 'blue' : 'lightgray'));
+                        let icon = i === 0 ? '🚁' : (i === waypoints.length - 1 ? '🎯' : String(i));
+                        
+                        if (i === 0) {{
+                            L.marker([wp.lat, wp.lon], {{
+                                icon: L.divIcon({{html: '<div style="background:#28a745;color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;">▶</div>', iconSize: [24, 24]}})
+                            }}).addTo(map).bindPopup(`起点 #${{i}}<br>高度: ${{wp.alt}}m`);
+                        }} else if (i === waypoints.length - 1) {{
+                            L.marker([wp.lat, wp.lon], {{
+                                icon: L.divIcon({{html: '<div style="background:#dc3545;color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;">■</div>', iconSize: [24, 24]}})
+                            }}).addTo(map).bindPopup(`终点 #${{i}}<br>高度: ${{wp.alt}}m`);
+                        }} else {{
+                            L.circleMarker([wp.lat, wp.lon], {{radius: 5, color: color, fill: true, fillOpacity: 0.8}})
+                                .addTo(map).bindPopup(`航点 #${{i}}<br>高度: ${{wp.alt}}m`);
+                        }}
+                    }});
+                }}
+                
+                // 绘制已飞路径
+                if (pathPoints.length > 0 && currentIndex > 0) {{
+                    const flownCoords = pathPoints.slice(0, currentIndex + 1).map(p => [p[0], p[1]]);
+                    L.polyline(flownCoords, {{color: '#00FF00', weight: 5, opacity: 0.9}}).addTo(map);
+                }}
+                
+                // 无人机位置和安全圆圈
+                if (pathPoints.length > 0 && currentIndex < pathPoints.length) {{
+                    const pos = pathPoints[currentIndex];
+                    
+                    // 安全圆圈
+                    L.circle(pos, {{
+                        radius: safetyRadius,
+                        color: 'orange',
+                        fill: true,
+                        fillOpacity: 0.2
+                    }}).addTo(map).bindPopup(`安全半径: ${{safetyRadius}}m`);
+                    
+                    // 无人机标记
+                    const planeIcon = L.divIcon({{
+                        html: '<div style="background:#ff9800;color:white;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);">✈</div>',
+                        iconSize: [30, 30],
+                        className: 'plane-icon'
+                    }});
+                    
+                    L.marker(pos, {{icon: planeIcon}}).addTo(map)
+                        .bindPopup(`🚁 无人机<br>(${{pos[0].toFixed(6)}}, ${{pos[1].toFixed(6)}})`);
+                    
+                    // 平滑移动动画
+                    if (isExecuting && currentIndex < pathPoints.length - 1) {{
+                        let frame = 0;
+                        const animate = () => {{
+                            frame++;
+                            if (frame < 3) {{  // 约50fps
+                                requestAnimationFrame(animate);
+                            }} else {{
+                                window.parent.postMessage({{type: 'update_position'}}, '*');
+                            }}
+                        }};
+                        animate();
+                    }}
+                }}
+            </script>
+            '''
             
-            # 无人机当前位置
-            folium.CircleMarker(drone_pos, radius=10, color='orange', fill=True, fillOpacity=0.9,
-                popup=f"🚁 无人机当前位置<br>({drone_pos[0]:.6f}, {drone_pos[1]:.6f})").add_to(m)
-            folium.Marker(drone_pos, 
-                icon=folium.Icon(color='orange', icon='plane', prefix='fa'),
-                popup="无人机").add_to(m)
-            
-            # 安全半径圆圈（实时更新）
-            safety_m = st.session_state.planner.safety_margin
-            folium.Circle(
-                drone_pos, 
-                radius=safety_m, 
-                color='orange', 
-                fill=True, 
-                fillOpacity=0.2,
-                popup=f"🛡️ 安全半径: {safety_m}m"
-            ).add_to(m)
-            
-            # 渲染地图
-            st_folium(m, width=750, height=550, key="flight_monitor_map")
+            components.html(map_html, height=560)
         
         # 右侧：通信日志面板
         with log_col:
