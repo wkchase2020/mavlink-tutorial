@@ -1529,7 +1529,7 @@ elif page == "✈️ 飞行监控":
             st.progress(prog)
             
             if st.session_state.mission_executing:
-                st.info(f"🚁 正在执行任务... 电池: {st.session_state.flight_stats['battery']}% | 点击"刷新地图"查看实时位置")
+                st.info(f"🚁 正在执行任务... 电池: {st.session_state.flight_stats['battery']}% | 点击「刷新地图」查看实时位置")
             else:
                 st.warning("⏸️ 任务已暂停或待执行")
         
@@ -1639,7 +1639,7 @@ elif page == "✈️ 飞行监控":
             # 执行飞行步骤（简化版，减少刷新）
             if st.session_state.mission_executing and st.session_state.drone_position and curr < total - 1:
                 st.markdown("---")
-                st.info("💡 任务执行中，点击上方"刷新地图"按钮查看最新位置")
+                st.info("💡 任务执行中，点击上方「刷新地图」按钮查看最新位置")
                 
                 # 执行一个航段（直接跳到下一个航点，减少中间刷新）
                 curr_wp = st.session_state.waypoints[curr]
