@@ -989,9 +989,14 @@ if page == "🗺️ 航线规划":
         # A点设置
         st.markdown("**📍 起点 A**")
         st.caption(f"输入坐标系: {st.session_state.coord_system}")
-        c1, c2 = st.columns(2)
+        col_a, col_def = st.columns([4, 1])
+        with col_def:
+            if st.button("⌗", key="def_a", help="默认A点: 32.2323, 118.7496"):
+                st.session_state.point_a = (32.2323, 118.7496)
+                st.rerun()
+        c1, c2 = col_a.columns(2)
         
-        default_lat_a, default_lon_a = 32.0603, 118.7969
+        default_lat_a, default_lon_a = 32.2323, 118.7496
         if st.session_state.point_a:
             lat_wgs, lon_wgs = st.session_state.point_a
             if st.session_state.coord_system == 'GCJ-02':
@@ -1011,9 +1016,14 @@ if page == "🗺️ 航线规划":
         
         # B点设置
         st.markdown("**📍 终点 B**")
-        c3, c4 = st.columns(2)
+        col_b, col_def2 = st.columns([4, 1])
+        with col_def2:
+            if st.button("⌗", key="def_b", help="默认B点: 32.2344, 118.7493"):
+                st.session_state.point_b = (32.2344, 118.7493)
+                st.rerun()
+        c3, c4 = col_b.columns(2)
         
-        default_lat_b, default_lon_b = 32.0703, 118.8069
+        default_lat_b, default_lon_b = 32.2344, 118.7493
         if st.session_state.point_b:
             lat_wgs, lon_wgs = st.session_state.point_b
             if st.session_state.coord_system == 'GCJ-02':
