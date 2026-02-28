@@ -793,6 +793,19 @@ with st.sidebar:
     
     if st.session_state.get('available_paths'):
         st.metric("可选路径数", len(st.session_state['available_paths']))
+    
+    # 通信链路日志 - 侧边栏实时显示
+    st.markdown("---")
+    st.header("📡 通信链路")
+    logs = st.session_state.comm_logger.get_logs()
+    if logs:
+        # 显示最近5条日志
+        for log in list(logs)[-5:]:
+            color = {"success": "green", "error": "red", "warning": "orange", "info": "blue"}.get(log['status'], "gray")
+            st.markdown(f"<small>[{log['timestamp']}] {log['icon']} <b>{log['msg_type']}</b></small>", unsafe_allow_html=True)
+            st.markdown(f"<small style='color:{color}'>{log['content'][:30]}...</small>", unsafe_allow_html=True)
+    else:
+        st.info("暂无通信记录")
 
 
 # ==================== 航线规划页面 ====================
@@ -1483,7 +1496,12 @@ elif page == "✈️ 飞行监控":
             if st.session_state.all_flight_positions and st.session_state.drone_pos_index < len(st.session_state.all_flight_positions):
                 drone_pos = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
             else:
-                drone_pos = st.session_state.waypoints[0] if st.session_state.waypoints else [32.0603, 118.7969]
+                # 修复：waypoints[0] 是 Waypoint 对象，需要转换为 [lat, lon]
+                if st.session_state.waypoints:
+                    first_wp = st.session_state.waypoints[0]
+                    drone_pos = [first_wp.lat, first_wp.lon]
+                else:
+                    drone_pos = [32.0603, 118.7969]
             
             m = folium.Map(location=drone_pos, zoom_start=17, tiles="CartoDB dark_matter")
             
