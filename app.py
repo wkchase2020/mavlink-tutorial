@@ -315,10 +315,23 @@ class Obstacle:
     def line_intersects(self, p1, p2):
         """检查线段是否与障碍物相交"""
         # 【关键修复】确保p1, p2是tuple格式 (lat, lon)
-        if hasattr(p1, 'lat'):
-            p1 = (p1.lat, p1.lon)
-        if hasattr(p2, 'lat'):
-            p2 = (p2.lat, p2.lon)
+        try:
+            if p1 is None or p2 is None:
+                return False
+            if hasattr(p1, 'lat') and hasattr(p1, 'lon'):
+                p1 = (float(p1.lat), float(p1.lon))
+            elif isinstance(p1, (list, tuple)) and len(p1) >= 2:
+                p1 = (float(p1[0]), float(p1[1]))
+            else:
+                return False
+            if hasattr(p2, 'lat') and hasattr(p2, 'lon'):
+                p2 = (float(p2.lat), float(p2.lon))
+            elif isinstance(p2, (list, tuple)) and len(p2) >= 2:
+                p2 = (float(p2[0]), float(p2[1]))
+            else:
+                return False
+        except (TypeError, ValueError, IndexError):
+            return False
         
         if self.type == "circle":
             # 检查线段上多个采样点
@@ -400,14 +413,23 @@ class GridPathPlanner:
     def line_hits_obstacle(self, p1, p2, flight_alt):
         """【严格】检测线段是否与任何障碍物相交"""
         # 【关键修复】确保p1, p2是tuple格式 (lat, lon)
-        if hasattr(p1, 'lat'):
-            p1 = (float(p1.lat), float(p1.lon))
-        else:
-            p1 = (float(p1[0]), float(p1[1]))
-        if hasattr(p2, 'lat'):
-            p2 = (float(p2.lat), float(p2.lon))
-        else:
-            p2 = (float(p2[0]), float(p2[1]))
+        try:
+            if p1 is None or p2 is None:
+                return False
+            if hasattr(p1, 'lat') and hasattr(p1, 'lon'):
+                p1 = (float(p1.lat), float(p1.lon))
+            elif isinstance(p1, (list, tuple)) and len(p1) >= 2:
+                p1 = (float(p1[0]), float(p1[1]))
+            else:
+                return False
+            if hasattr(p2, 'lat') and hasattr(p2, 'lon'):
+                p2 = (float(p2.lat), float(p2.lon))
+            elif isinstance(p2, (list, tuple)) and len(p2) >= 2:
+                p2 = (float(p2[0]), float(p2[1]))
+            else:
+                return False
+        except (TypeError, ValueError, IndexError):
+            return False
         
         for obs in self.obstacles:
             if obs.height >= flight_alt:
