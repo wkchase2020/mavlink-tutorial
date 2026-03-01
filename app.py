@@ -1429,108 +1429,54 @@ if page == "🗺️ 航线规划":
 
 # ==================== 飞行监控页面 ====================
 elif page == "✈️ 飞行监控":
-    st.title("✈️ 飞行监控 - 实时进程显示")
+    st.title("🚁 飞行实时画面 - 任务执行监控")
     
     if not st.session_state.mission_sent:
-        st.warning("请先规划并上传航线")
+        st.warning("⚠️ 请先规划并上传航线")
     else:
-        total = len(st.session_state.waypoints)
+        total_wp = len(st.session_state.waypoints)
+        curr_idx = st.session_state.current_waypoint_index
         
-        # 通信链路拓扑图
-        with st.expander("📡 通信链路拓扑与数据流", expanded=True):
-            # 节点状态控制
-            status_cols = st.columns(3)
-            with status_cols[0]:
-                gcs_active = st.checkbox("🖥️ GCS 在线", value=True, key="gcs_check_v7")
-            with status_cols[1]:
-                obc_active = st.checkbox("🧠 OBC 在线", value=True, key="obc_check_v7")
-            with status_cols[2]:
-                fcu_active = st.checkbox("⚙️ FCU 在线", value=True, key="fcu_check_v7")
-            
-            st.markdown("---")
-            
-            # 链路状态计算
-            gcs_obc_ok = gcs_active and obc_active
-            obc_fcu_ok = obc_active and fcu_active
-            gcs_fcu_ok = gcs_active and fcu_active
-            
-            gcs_obc_status = "🟢 已连接" if gcs_obc_ok else "🔴 断开"
-            obc_fcu_status = "🟢 已连接" if obc_fcu_ok else "🔴 断开"
-            gcs_fcu_status = "🟢 直连" if gcs_fcu_ok else "⚪ 未直连"
-            
-            # 拓扑图可视化
-            topo_html = """
-            <div style="background:#f8f9fa;padding:15px;border-radius:10px;margin:10px 0;">
-                <table style="width:100%;text-align:center;">
-                    <tr>
-                        <td style="width:20%;">
-                            <div style="background:#e3f2fd;padding:15px;border-radius:8px;border:2px solid #2196f3;">
-                                <div style="font-size:24px;">🖥️</div>
-                                <div style="font-weight:bold;">GCS</div>
-                                <div style="font-size:11px;color:#666;">地面站<br>192.168.1.100</div>
-                            </div>
-                        </td>
-                        <td style="width:15%;vertical-align:middle;">
-                            <div style="font-size:14px;color:#0066cc;">⬆⬇<br>UDP:14550</div>
-                            <div style="font-size:12px;padding:3px 8px;background:#e8f5e9;border-radius:10px;display:inline-block;">""" + gcs_obc_status + """</div>
-                        </td>
-                        <td style="width:20%;">
-                            <div style="background:#fff3e0;padding:15px;border-radius:8px;border:2px solid #ff9800;">
-                                <div style="font-size:24px;">🧠</div>
-                                <div style="font-weight:bold;">OBC</div>
-                                <div style="font-size:11px;color:#666;">机载计算机<br>Raspberry Pi 4</div>
-                            </div>
-                        </td>
-                        <td style="width:15%;vertical-align:middle;">
-                            <div style="font-size:14px;color:#e65100;">⬆⬇<br>MAVLink</div>
-                            <div style="font-size:12px;padding:3px 8px;background:#e8f5e9;border-radius:10px;display:inline-block;">""" + obc_fcu_status + """</div>
-                        </td>
-                        <td style="width:20%;">
-                            <div style="background:#f3e5f5;padding:15px;border-radius:8px;border:2px solid #9c27b0;">
-                                <div style="font-size:24px;">⚙️</div>
-                                <div style="font-weight:bold;">FCU</div>
-                                <div style="font-size:11px;color:#666;">飞控<br>PX4 / ArduPilot</div>
-                            </div>
-                        </td>
-                    </tr>
-                </table>
-                
-                <div style="margin-top:15px;padding:10px;background:#fff;border-radius:5px;font-size:12px;">
-                    <b>📊 链路统计：</b>
-                    <span style="margin-left:15px;">GCS↔OBC: """ + ("正常" if gcs_obc_ok else "异常") + """</span>
-                    <span style="margin-left:15px;">OBC↔FCU: """ + ("正常" if obc_fcu_ok else "异常") + """</span>
-                    <span style="margin-left:15px;">延迟: ~25ms</span>
-                    <span style="margin-left:15px;">丢包率: 0.1%</span>
-                </div>
-            </div>
-            """
-            st.html(topo_html)
+        # ==========================================
+        # 顶部控制栏
+        # ==========================================
+        ctrl_cols = st.columns([2, 2, 2, 2, 2])
         
-        # 控制按钮
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
+        with ctrl_cols[0]:
             if not st.session_state.mission_executing:
-                if st.button("▶️ 开始执行任务", type="primary", use_container_width=True):
+                if st.button("▶️ 开始任务", type="primary", use_container_width=True):
                     st.session_state.mission_executing = True
                     st.session_state.current_waypoint_index = 0
                     st.session_state.flight_path_history = []
+                    st.session_state.wp_reached_log = set()
                     
                     # 预计算所有飞行位置点
                     positions = []
-                    steps_per_segment = 25  # 每段25个点，更流畅
+                    steps_per_segment = 30
                     for i in range(len(st.session_state.waypoints) - 1):
                         curr, next_wp = st.session_state.waypoints[i], st.session_state.waypoints[i + 1]
                         for step in range(steps_per_segment):
                             t = step / steps_per_segment
                             positions.append([
                                 curr.lat + (next_wp.lat - curr.lat) * t,
-                                curr.lon + (next_wp.lon - curr.lon) * t
+                                curr.lon + (next_wp.lon - curr.lon) * t,
+                                curr.alt + (next_wp.alt - curr.alt) * t
                             ])
-                    positions.append([st.session_state.waypoints[-1].lat, st.session_state.waypoints[-1].lon])
+                    positions.append([
+                        st.session_state.waypoints[-1].lat,
+                        st.session_state.waypoints[-1].lon,
+                        st.session_state.waypoints[-1].alt
+                    ])
                     st.session_state.all_flight_positions = positions
                     st.session_state.drone_pos_index = 0
                     st.session_state.flight_start_time = time.time()
+                    st.session_state.total_distance = sum(
+                        st.session_state.planner.haversine_distance(
+                            st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon,
+                            st.session_state.waypoints[i+1].lat, st.session_state.waypoints[i+1].lon
+                        ) for i in range(len(st.session_state.waypoints)-1)
+                    )
+                    st.session_state.flown_distance = 0
                     
                     if st.session_state.waypoints:
                         st.session_state.drone_position = [
@@ -1539,279 +1485,455 @@ elif page == "✈️ 飞行监控":
                         ]
                     
                     st.session_state.comm_logger.log_flight_start()
-                    
-                    # 记录MAVLink日志
                     timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                    st.session_state.send_log.append(f"[{timestamp}] GCS→FCU: CMD_MISSION_START")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: ACK MISSION_START accepted")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: STATUS Armed | Mode: AUTO | WP: 0/{len(st.session_state.waypoints)}")
-                    
+                    st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_START")
+                    st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: CMD_ARM_AND_TAKEOFF")
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: ACK | Armed | Mode: AUTO")
                     st.rerun()
             else:
-                st.button("⏳ 任务执行中...", disabled=True, use_container_width=True)
+                st.button("⏳ 执行中...", disabled=True, use_container_width=True)
         
-        with col2:
-            if st.button("⏹️ 紧急停止", use_container_width=True):
+        with ctrl_cols[1]:
+            if st.button("⏸️ 暂停", use_container_width=True):
                 st.session_state.mission_executing = False
-                st.warning("任务已停止")
+                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: PAUSE_MISSION")
+                st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: ACK | Mode: LOITER")
                 st.rerun()
         
-        with col3:
-            if st.button("🔄 重置任务", use_container_width=True):
+        with ctrl_cols[2]:
+            if st.button("⏹️ 停止", use_container_width=True):
+                st.session_state.mission_executing = False
+                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: ABORT_MISSION")
+                st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: CMD_LAND")
+                st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: ACK | Landing...")
+                st.rerun()
+        
+        with ctrl_cols[3]:
+            if st.button("🔄 重置", use_container_width=True):
                 st.session_state.mission_executing = False
                 st.session_state.drone_position = None
                 st.session_state.current_waypoint_index = 0
                 st.session_state.flight_path_history = []
                 st.session_state.drone_pos_index = 0
                 st.session_state.all_flight_positions = []
+                st.session_state.flown_distance = 0
+                st.session_state.flight_start_time = None
                 st.rerun()
         
-        # 自动推进飞行位置
-        if st.session_state.mission_executing and st.session_state.all_flight_positions:
-            idx = st.session_state.drone_pos_index
-            total_pos = len(st.session_state.all_flight_positions)
-            total_wp = len(st.session_state.waypoints)
-            
-            if idx < total_pos - 1:
-                old_wp_idx = st.session_state.current_waypoint_index
-                st.session_state.drone_pos_index += 1
-                # 计算当前航点索引 (steps_per_segment=25)
-                new_wp_idx = min(st.session_state.drone_pos_index // 25, total_wp - 1)
-                st.session_state.current_waypoint_index = new_wp_idx
-                # 更新drone_position和flight_path_history
-                st.session_state.drone_position = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
-                st.session_state.flight_path_history = st.session_state.all_flight_positions[:st.session_state.drone_pos_index+1]
-                
-                # 记录航点到达日志
-                if new_wp_idx > old_wp_idx and new_wp_idx < total_wp:
-                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                    st.session_state.comm_logger.log_waypoint_reached(new_wp_idx, total_wp)
-                    # 完整的通信链路日志
-                    st.session_state.send_log.append(f"[{timestamp}] GCS→FCU: WP_ACK #{new_wp_idx}")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: WP_REACHED #{new_wp_idx}")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: TELEMETRY lat={st.session_state.drone_position[0]:.6f} lon={st.session_state.drone_position[1]:.6f} alt={st.session_state.waypoints[new_wp_idx].alt} spd=8.5")
-                
-                # 每5步记录一次遥测数据
-                if st.session_state.drone_pos_index % 5 == 0:
-                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                    pos = st.session_state.drone_position
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: HEARTBEAT lat={pos[0]:.6f} lon={pos[1]:.6f} bat=87%")
-                
-                # 0.08秒刷新，约12fps，更流畅
-                time.sleep(0.08)
-                st.rerun()
+        with ctrl_cols[4]:
+            # 显示任务状态
+            if st.session_state.mission_executing:
+                st.success("🟢 飞行中")
+            elif st.session_state.drone_position:
+                st.warning("🟡 已暂停")
             else:
-                st.session_state.mission_executing = False
-                st.session_state.comm_logger.log_flight_complete()
-                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                st.session_state.send_log.append(f"[{timestamp}] GCS→FCU: CMD_LAND")
-                st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: MISSION_COMPLETE")
-                st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: STATUS Disarmed | Mode: LOITER | WP: {total_wp}/{total_wp}")
-                st.success("🎉 任务执行完成！")
+                st.info("⚪ 就绪")
         
-        # 状态显示 - 两列布局：地图 + 日志
-        main_col, log_col = st.columns([3, 2])
+        # ==========================================
+        # 实时状态面板 - 关键指标
+        # ==========================================
+        st.markdown("---")
+        
+        # 计算实时数据
+        flight_time = 0
+        if st.session_state.flight_start_time:
+            flight_time = int(time.time() - st.session_state.flight_start_time)
+        
+        flight_speed = 8.5  # m/s
+        if st.session_state.mission_executing and flight_time > 0:
+            flight_speed = 8.5 + (0.5 if flight_time % 4 < 2 else -0.3)  # 模拟速度波动
+        
+        # 计算剩余距离
+        remaining_dist = 0
+        if st.session_state.all_flight_positions and st.session_state.drone_pos_index < len(st.session_state.all_flight_positions):
+            remaining_idx = st.session_state.drone_pos_index
+            remaining_segments = len(st.session_state.all_flight_positions) - remaining_idx
+            avg_segment_dist = st.session_state.total_distance / max(1, len(st.session_state.all_flight_positions))
+            remaining_dist = remaining_segments * avg_segment_dist
+        
+        # 计算已飞距离
+        flown_dist = st.session_state.total_distance - remaining_dist if hasattr(st.session_state, 'total_distance') else 0
+        
+        # 预计到达时间
+        eta_seconds = remaining_dist / max(0.1, flight_speed) if flight_speed > 0 else 0
+        eta_str = f"{int(eta_seconds//60):02d}:{int(eta_seconds%60):02d}"
+        
+        # 飞行进度百分比
+        progress_pct = min(100, int((curr_idx / max(1, total_wp-1)) * 100)) if total_wp > 0 else 0
+        
+        # 显示状态卡片
+        status_cols = st.columns(6)
+        
+        with status_cols[0]:
+            st.metric("📍 当前航点", f"{min(curr_idx+1, total_wp)}/{total_wp}")
+        with status_cols[1]:
+            st.metric("⚡ 飞行速度", f"{flight_speed:.1f} m/s")
+        with status_cols[2]:
+            st.metric("⏱️ 已用时间", f"{flight_time//60:02d}:{flight_time%60:02d}")
+        with status_cols[3]:
+            st.metric("📏 剩余距离", f"{remaining_dist:.0f} m")
+        with status_cols[4]:
+            st.metric("🏁 预计到达", eta_str)
+        with status_cols[5]:
+            st.metric("🔋 电量模拟", f"{max(0, 100 - flight_time//10)}%")
+        
+        # 进度条
+        st.progress(progress_pct / 100, text=f"任务进度: {progress_pct}%")
+        
+        st.markdown("---")
+        
+        # ==========================================
+        # 主显示区域：地图 + 通信链路
+        # ==========================================
+        main_col, right_col = st.columns([3, 2])
         
         with main_col:
-            curr = st.session_state.current_waypoint_index
-            total = len(st.session_state.waypoints)
+            st.subheader("🗺️ 实时飞行地图")
             
-            if total > 0:
-                prog = min(100, int((curr / max(1, total-1)) * 100))
-                st.progress(prog)
-                cols = st.columns(4)
-                cols[0].metric("当前航点", f"{min(curr+1, total)}/{total}")
-                cols[1].metric("完成进度", f"{prog}%")
-                if st.session_state.flight_start_time:
-                    cols[2].metric("飞行时间", f"{int(time.time() - st.session_state.flight_start_time)}s")
-                cols[3].metric("速度", "8.5m/s")
-                
-                if st.session_state.mission_executing:
-                    st.info("🚁 正在执行任务...")
-                elif st.session_state.drone_position:
-                    st.warning("⏸️ 任务已暂停")
-            
-            # 地图显示 - 完整版本
+            # 获取无人机当前位置
             if st.session_state.all_flight_positions and st.session_state.drone_pos_index < len(st.session_state.all_flight_positions):
-                drone_pos = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
+                drone_pos = st.session_state.all_flight_positions[st.session_state.drone_pos_index][:2]
             else:
-                if st.session_state.waypoints:
-                    first_wp = st.session_state.waypoints[0]
-                    drone_pos = [first_wp.lat, first_wp.lon]
+                drone_pos = [st.session_state.waypoints[0].lat, st.session_state.waypoints[0].lon] if st.session_state.waypoints else [32.0603, 118.7969]
+            
+            # 创建地图
+            m = folium.Map(location=drone_pos, zoom_start=17, tiles="OpenStreetMap")
+            
+            # 添加卫星图层
+            folium.TileLayer(
+                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attr='Esri',
+                name='🛰️ 卫星影像',
+                overlay=False,
+                control=True
+            ).add_to(m)
+            folium.LayerControl(position='topright').add_to(m)
+            
+            # 显示障碍物
+            for obs in st.session_state.planner.obstacles:
+                color = 'red' if obs.height >= st.session_state.flight_altitude else 'orange'
+                if obs.type == "circle":
+                    folium.Circle(
+                        [obs.center_lat, obs.center_lon],
+                        radius=obs.radius,
+                        popup=f"{obs.name}<br>高度:{obs.height}m",
+                        color=color, fill=True, fillOpacity=0.3
+                    ).add_to(m)
                 else:
-                    drone_pos = [32.0603, 118.7969]
+                    folium.Polygon(
+                        locations=obs.points,
+                        popup=f"{obs.name}<br>高度:{obs.height}m",
+                        color=color, fill=True, fillOpacity=0.3
+                    ).add_to(m)
             
-            # 使用 JavaScript/Leaflet 实现流畅动画
-            import json
-            
-            # 准备航点数据
-            waypoints_data = []
+            # 绘制计划航线（灰色虚线）
             if st.session_state.waypoints:
+                path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
+                folium.PolyLine(
+                    path_coords, 
+                    color='gray', 
+                    weight=2, 
+                    opacity=0.5, 
+                    dash_array='5,10',
+                    popup="计划航线"
+                ).add_to(m)
+                
+                # 绘制航点
                 for i, wp in enumerate(st.session_state.waypoints):
-                    waypoints_data.append({
-                        'lat': wp.lat, 
-                        'lon': wp.lon, 
-                        'alt': wp.alt, 
-                        'idx': i,
-                        'is_start': i == 0,
-                        'is_end': i == len(st.session_state.waypoints) - 1
-                    })
-            
-            # 预计算路径点
-            path_data = st.session_state.all_flight_positions if st.session_state.all_flight_positions else []
-            current_idx = st.session_state.drone_pos_index
-            is_executing = st.session_state.mission_executing
-            safety_radius = st.session_state.planner.safety_margin
-            
-            # 构建 JavaScript 地图
-            map_html = f'''
-            <div id="flight-map" style="width:100%;height:550px;border-radius:8px;"></div>
-            <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-            <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-            <script>
-                // 航点数据
-                const waypoints = {json.dumps(waypoints_data)};
-                const pathPoints = {json.dumps(path_data)};
-                const currentIndex = {current_idx};
-                const isExecuting = {str(is_executing).lower()};
-                const safetyRadius = {safety_radius};
-                
-                // 初始化地图
-                const map = L.map('flight-map').setView([{drone_pos[0]}, {drone_pos[1]}], 17);
-                
-                // 添加底图
-                L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-                    attribution: '© OpenStreetMap'
-                }}).addTo(map);
-                
-                // 添加卫星图层切换
-                const baseLayers = {{
-                    "街道": L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'),
-                    "卫星": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}')
-                }};
-                baseLayers["街道"].addTo(map);
-                L.control.layers(baseLayers).addTo(map);
-                
-                // 绘制计划航线
-                if (waypoints.length > 0) {{
-                    const planCoords = waypoints.map(wp => [wp.lat, wp.lon]);
-                    L.polyline(planCoords, {{color: 'gray', weight: 2, opacity: 0.5, dashArray: '5,10'}}).addTo(map);
-                    
-                    // 绘制航点
-                    waypoints.forEach((wp, i) => {{
-                        let color = i === 0 ? 'green' : (i === waypoints.length - 1 ? 'red' : (i > currentIndex/25 ? 'blue' : 'lightgray'));
-                        let icon = i === 0 ? '🚁' : (i === waypoints.length - 1 ? '🎯' : String(i));
+                    if i == 0:
+                        folium.Marker(
+                            [wp.lat, wp.lon],
+                            icon=folium.Icon(color='green', icon='play', prefix='glyphicon'),
+                            popup=f"🚁 起点 WP{i}<br>高度: {wp.alt}m"
+                        ).add_to(m)
+                    elif i == len(st.session_state.waypoints) - 1:
+                        folium.Marker(
+                            [wp.lat, wp.lon],
+                            icon=folium.Icon(color='red', icon='stop', prefix='glyphicon'),
+                            popup=f"🎯 终点 WP{i}<br>高度: {wp.alt}m"
+                        ).add_to(m)
+                    else:
+                        # 已完成的航点显示灰色，当前和未来的显示蓝色
+                        if i < curr_idx:
+                            color = 'lightgray'
+                            icon = '✓'
+                        elif i == curr_idx:
+                            color = 'blue'
+                            icon = '🚁'
+                        else:
+                            color = 'blue'
+                            icon = str(i)
                         
-                        if (i === 0) {{
-                            L.marker([wp.lat, wp.lon], {{
-                                icon: L.divIcon({{html: '<div style="background:#28a745;color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;">▶</div>', iconSize: [24, 24]}})
-                            }}).addTo(map).bindPopup(`起点 #${{i}}<br>高度: ${{wp.alt}}m`);
-                        }} else if (i === waypoints.length - 1) {{
-                            L.marker([wp.lat, wp.lon], {{
-                                icon: L.divIcon({{html: '<div style="background:#dc3545;color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;">■</div>', iconSize: [24, 24]}})
-                            }}).addTo(map).bindPopup(`终点 #${{i}}<br>高度: ${{wp.alt}}m`);
-                        }} else {{
-                            L.circleMarker([wp.lat, wp.lon], {{radius: 5, color: color, fill: true, fillOpacity: 0.8}})
-                                .addTo(map).bindPopup(`航点 #${{i}}<br>高度: ${{wp.alt}}m`);
-                        }}
-                    }});
-                }}
+                        folium.CircleMarker(
+                            [wp.lat, wp.lon],
+                            radius=6 if i == curr_idx else 4,
+                            color=color,
+                            fill=True,
+                            fillOpacity=0.8,
+                            popup=f"航点 WP{i}<br>高度: {wp.alt}m<br>状态: {'已完成' if i < curr_idx else '当前' if i == curr_idx else '待执行'}"
+                        ).add_to(m)
                 
-                // 绘制已飞路径
-                if (pathPoints.length > 0 && currentIndex > 0) {{
-                    const flownCoords = pathPoints.slice(0, currentIndex + 1).map(p => [p[0], p[1]]);
-                    L.polyline(flownCoords, {{color: '#00FF00', weight: 5, opacity: 0.9}}).addTo(map);
-                }}
-                
-                // 无人机位置和安全圆圈
-                if (pathPoints.length > 0 && currentIndex < pathPoints.length) {{
-                    const pos = pathPoints[currentIndex];
-                    
-                    // 安全圆圈
-                    L.circle(pos, {{
-                        radius: safetyRadius,
-                        color: 'orange',
-                        fill: true,
-                        fillOpacity: 0.2
-                    }}).addTo(map).bindPopup(`安全半径: ${{safetyRadius}}m`);
-                    
-                    // 无人机标记
-                    const planeIcon = L.divIcon({{
-                        html: '<div style="background:#ff9800;color:white;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);">✈</div>',
-                        iconSize: [30, 30],
-                        className: 'plane-icon'
-                    }});
-                    
-                    L.marker(pos, {{icon: planeIcon}}).addTo(map)
-                        .bindPopup(`🚁 无人机<br>(${{pos[0].toFixed(6)}}, ${{pos[1].toFixed(6)}})`);
-                    
-                    // 平滑移动动画
-                    if (isExecuting && currentIndex < pathPoints.length - 1) {{
-                        let frame = 0;
-                        const animate = () => {{
-                            frame++;
-                            if (frame < 3) {{  // 约50fps
-                                requestAnimationFrame(animate);
-                            }} else {{
-                                window.parent.postMessage({{type: 'update_position'}}, '*');
-                            }}
-                        }};
-                        animate();
-                    }}
-                }}
-            </script>
-            '''
+                # 绘制已飞路径（绿色实线）
+                if st.session_state.drone_pos_index > 0:
+                    flown_path = st.session_state.all_flight_positions[:st.session_state.drone_pos_index+1]
+                    flown_coords = [[p[0], p[1]] for p in flown_path]
+                    folium.PolyLine(
+                        flown_coords,
+                        color='#00FF00',
+                        weight=5,
+                        opacity=0.9,
+                        popup="已飞路径"
+                    ).add_to(m)
             
-            components.html(map_html, height=560)
+            # 无人机当前位置标记
+            if st.session_state.drone_position or st.session_state.all_flight_positions:
+                # 无人机图标
+                folium.Marker(
+                    drone_pos,
+                    icon=folium.DivIcon(
+                        html='<div style="background:#ff6b00;color:white;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.4);transform:rotate(45deg);">✈</div>',
+                        icon_size=[36, 36],
+                        icon_anchor=[18, 18]
+                    ),
+                    popup=f"🚁 无人机<br>位置: ({drone_pos[0]:.6f}, {drone_pos[1]:.6f})<br>速度: {flight_speed:.1f} m/s"
+                ).add_to(m)
+                
+                # 安全半径圆圈
+                safety_m = st.session_state.planner.safety_margin
+                folium.Circle(
+                    drone_pos,
+                    radius=safety_m,
+                    color='orange',
+                    fill=True,
+                    fillOpacity=0.15,
+                    popup=f"🛡️ 安全半径: {safety_m}m"
+                ).add_to(m)
+            
+            # 渲染地图
+            st_folium(m, width=750, height=500, key="flight_monitor_map_v2")
         
-        # 右侧：通信日志面板
-        with log_col:
-            st.subheader("📡 通信链路")
+        with right_col:
+            # ==========================================
+            # 通信链路状态
+            # ==========================================
+            st.subheader("📡 通信链路状态")
             
-            # Tab切换：业务流程 | MAVLink收发
-            log_tab1, log_tab2 = st.tabs(["🔄 业务流程", "📡 MAVLink收发"])
+            # 节点在线状态
+            node_cols = st.columns(3)
+            with node_cols[0]:
+                gcs_online = st.checkbox("🖥️ GCS", value=True, key="gcs_node")
+            with node_cols[1]:
+                obc_online = st.checkbox("🧠 OBC", value=True, key="obc_node")
+            with node_cols[2]:
+                fcu_online = st.checkbox("⚙️ FCU", value=True, key="fcu_node")
+            
+            # 链路状态可视化
+            gcs_obc_ok = gcs_online and obc_online
+            obc_fcu_ok = obc_online and fcu_online
+            
+            link_html = f"""
+            <div style="background:#f8f9fa;padding:12px;border-radius:8px;margin:8px 0;font-size:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <span><b>🖥️ GCS</b> ←→ <b>🧠 OBC</b></span>
+                    <span style="color:{'#28a745' if gcs_obc_ok else '#dc3545'};">{'🟢 已连接' if gcs_obc_ok else '🔴 断开'}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span><b>🧠 OBC</b> ←→ <b>⚙️ FCU</b></span>
+                    <span style="color:{'#28a745' if obc_fcu_ok else '#dc3545'};">{'🟢 已连接' if obc_fcu_ok else '🔴 断开'}</span>
+                </div>
+                <div style="margin-top:8px;padding-top:8px;border-top:1px solid #ddd;font-size:11px;color:#666;">
+                    延迟: ~25ms | 丢包率: 0.1% | 带宽: 57600bps
+                </div>
+            </div>
+            """
+            st.html(link_html)
+            
+            # ==========================================
+            # 通信日志 Tab
+            # ==========================================
+            st.subheader("📋 通信日志")
+            
+            log_tab1, log_tab2, log_tab3 = st.tabs(["🔄 业务流程", "📤 GCS→OBC→FCU", "📥 FCU→OBC→GCS"])
             
             with log_tab1:
                 logs = st.session_state.comm_logger.get_logs()
-                log_html = "<div style='max-height:380px;overflow-y:auto;font-family:monospace;font-size:11px;background:#f8f9fa;padding:8px;border-radius:5px;'>"
-                for log in reversed(logs[-15:]):
-                    bg_color = {"success": "#d4edda", "error": "#f8d7da", "warning": "#fff3cd", "info": "#e7f3ff"}.get(log['status'], "#f8f9fa")
-                    border_color = {"success": "#28a745", "error": "#dc3545", "warning": "#ffc107", "info": "#17a2b8"}.get(log['status'], "#6c757d")
-                    log_html += f"<div style='padding:4px;margin:2px 0;border-radius:3px;background:{bg_color};border-left:3px solid {border_color}'>"
-                    log_html += f"<span style='color:#666;font-size:9px'>[{log['timestamp']}]</span> "
-                    log_html += f"{log['icon']} <b>{log['msg_type']}</b><br>"
-                    log_html += f"<span style='color:#333'>{log['content']}</span><br>"
-                    log_html += f"<small style='color:#666'>{log['direction']}</small>"
-                    log_html += f"</div>"
-                log_html += "</div>"
-                st.html(log_html)
+                if logs:
+                    log_html = "<div style='max-height:280px;overflow-y:auto;font-family:monospace;font-size:10px;background:#f8f9fa;padding:8px;border-radius:5px;'>"
+                    for log in reversed(logs[-20:]):
+                        bg_color = {"success": "#d4edda", "error": "#f8d7da", "warning": "#fff3cd", "info": "#e7f3ff", "processing": "#e2e3e5"}.get(log['status'], "#f8f9fa")
+                        border_color = {"success": "#28a745", "error": "#dc3545", "warning": "#ffc107", "info": "#17a2b8", "processing": "#6c757d"}.get(log['status'], "#6c757d")
+                        log_html += f"<div style='padding:4px;margin:2px 0;border-radius:3px;background:{bg_color};border-left:3px solid {border_color};'>"
+                        log_html += f"<span style='color:#666;font-size:9px'>[{log['timestamp']}]</span> "
+                        log_html += f"{log['icon']} <b>{log['msg_type']}</b><br>"
+                        log_html += f"<span style='color:#333'>{log['content']}</span><br>"
+                        log_html += f"<small style='color:#666'>{log['direction']}</small>"
+                        log_html += f"</div>"
+                    log_html += "</div>"
+                    st.html(log_html)
+                else:
+                    st.info("暂无业务流程日志")
                 
-                if st.button("🗑️ 清除日志", key="clear_comm_log"):
+                if st.button("🗑️ 清除日志", key="clear_biz_log"):
                     st.session_state.comm_logger.clear()
                     st.rerun()
             
             with log_tab2:
-                # MAVLink发送日志
-                st.markdown("<small style='color:#0066cc'>📤 GCS → FCU (发送)</small>", unsafe_allow_html=True)
-                send_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#e7f3ff;padding:5px;border-radius:3px;'>"
+                # GCS → OBC → FCU 发送日志
+                send_html = "<div style='max-height:280px;overflow-y:auto;font-family:monospace;font-size:10px;background:#e7f3ff;padding:8px;border-radius:5px;'>"
+                send_html += "<div style='color:#0066cc;font-weight:bold;margin-bottom:5px;'>📤 GCS → OBC</div>"
                 if st.session_state.send_log:
-                    for log in list(st.session_state.send_log)[-8:]:
-                        send_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
-                else:
+                    for log in list(st.session_state.send_log)[-15:]:
+                        if '→OBC' in log or 'GCS→' in log:
+                            send_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc;'>{log}</div>"
+                send_html += "<div style='color:#e65100;font-weight:bold;margin:10px 0 5px 0;'>📤 OBC → FCU</div>"
+                if st.session_state.send_log:
+                    for log in list(st.session_state.send_log)[-15:]:
+                        if 'OBC→FCU' in log or '→FCU' in log:
+                            send_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc;'>{log}</div>"
+                if not st.session_state.send_log:
                     send_html += "<div style='color:#999'>暂无发送记录</div>"
                 send_html += "</div>"
                 st.html(send_html)
-                
-                # MAVLink接收日志
-                st.markdown("<small style='color:#cc6600'>📥 FCU → GCS (接收)</small>", unsafe_allow_html=True)
-                recv_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:5px;border-radius:3px;'>"
+            
+            with log_tab3:
+                # FCU → OBC → GCS 接收日志
+                recv_html = "<div style='max-height:280px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:8px;border-radius:5px;'>"
+                recv_html += "<div style='color:#e65100;font-weight:bold;margin-bottom:5px;'>📥 FCU → OBC</div>"
                 if st.session_state.recv_log:
-                    for log in list(st.session_state.recv_log)[-8:]:
-                        recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
-                else:
+                    for log in list(st.session_state.recv_log)[-15:]:
+                        if 'FCU→' in log or '→OBC' in log:
+                            recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc;'>{log}</div>"
+                recv_html += "<div style='color:#0066cc;font-weight:bold;margin:10px 0 5px 0;'>📥 OBC → GCS</div>"
+                if st.session_state.recv_log:
+                    for log in list(st.session_state.recv_log)[-15:]:
+                        if 'OBC→GCS' in log or '→GCS' in log:
+                            recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc;'>{log}</div>"
+                if not st.session_state.recv_log:
                     recv_html += "<div style='color:#999'>暂无接收记录</div>"
                 recv_html += "</div>"
                 st.html(recv_html)
+        
+        # ==========================================
+        # 底部：航点详细进程表
+        # ==========================================
+        st.markdown("---")
+        st.subheader("📍 航点详细进程")
+        
+        if st.session_state.waypoints:
+            # 创建航点表格数据
+            wp_data = []
+            for i, wp in enumerate(st.session_state.waypoints):
+                # 计算到下一个航点的距离
+                dist_to_next = 0
+                if i < len(st.session_state.waypoints) - 1:
+                    dist_to_next = st.session_state.planner.haversine_distance(
+                        wp.lat, wp.lon,
+                        st.session_state.waypoints[i+1].lat, st.session_state.waypoints[i+1].lon
+                    )
+                
+                # 计算ETA
+                eta = "--:--"
+                if i >= curr_idx and flight_speed > 0:
+                    dist_accum = 0
+                    for j in range(curr_idx, i):
+                        dist_accum += st.session_state.planner.haversine_distance(
+                            st.session_state.waypoints[j].lat, st.session_state.waypoints[j].lon,
+                            st.session_state.waypoints[j+1].lat, st.session_state.waypoints[j+1].lon
+                        )
+                    eta_seconds = dist_accum / flight_speed
+                    eta = f"{int(eta_seconds//60):02d}:{int(eta_seconds%60):02d}"
+                
+                # 状态
+                if i < curr_idx:
+                    status = "✅ 已完成"
+                    status_color = "green"
+                elif i == curr_idx:
+                    status = "🚁 当前"
+                    status_color = "orange"
+                else:
+                    status = "⏳ 待执行"
+                    status_color = "gray"
+                
+                wp_data.append({
+                    "序号": f"WP{i}",
+                    "坐标": f"{wp.lat:.5f}, {wp.lon:.5f}",
+                    "高度": f"{wp.alt}m",
+                    "距下点": f"{dist_to_next:.0f}m" if dist_to_next > 0 else "--",
+                    "状态": status,
+                    "预计": eta
+                })
+            
+            # 显示表格
+            wp_df_cols = st.columns(len(wp_data))
+            for i, wp_info in enumerate(wp_data):
+                with wp_df_cols[i]:
+                    card_style = "background:#e8f5e9;border:2px solid #4caf50;" if "已完成" in wp_info['状态'] else \
+                                "background:#fff3e0;border:2px solid #ff9800;" if "当前" in wp_info['状态'] else \
+                                "background:#f5f5f5;border:1px solid #ddd;"
+                    
+                    st.markdown(f"""
+                    <div style="{card_style}padding:8px;border-radius:6px;text-align:center;font-size:11px;">
+                        <div style="font-weight:bold;font-size:13px;margin-bottom:4px;">{wp_info['序号']}</div>
+                        <div style="color:#666;margin-bottom:2px;">{wp_info['坐标']}</div>
+                        <div style="color:#2196f3;font-weight:bold;">{wp_info['高度']}</div>
+                        <div style="margin-top:4px;padding-top:4px;border-top:1px dashed #ccc;">
+                            <span style="font-size:10px;">{wp_info['状态']}</span>
+                        </div>
+                        <div style="font-size:9px;color:#666;margin-top:2px;">{wp_info['预计']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        # ==========================================
+        # 自动推进飞行位置
+        # ==========================================
+        if st.session_state.mission_executing and st.session_state.all_flight_positions:
+            idx = st.session_state.drone_pos_index
+            total_pos = len(st.session_state.all_flight_positions)
+            
+            if idx < total_pos - 1:
+                old_wp_idx = st.session_state.current_waypoint_index
+                st.session_state.drone_pos_index += 1
+                new_wp_idx = min(st.session_state.drone_pos_index // 30, total_wp - 1)
+                st.session_state.current_waypoint_index = new_wp_idx
+                st.session_state.drone_position = st.session_state.all_flight_positions[st.session_state.drone_pos_index][:2]
+                
+                # 更新已飞距离
+                st.session_state.flown_distance = sum(
+                    st.session_state.planner.haversine_distance(
+                        st.session_state.all_flight_positions[j][0], st.session_state.all_flight_positions[j][1],
+                        st.session_state.all_flight_positions[j+1][0], st.session_state.all_flight_positions[j+1][1]
+                    ) for j in range(0, st.session_state.drone_pos_index)
+                )
+                
+                # 航点到达日志
+                if new_wp_idx > old_wp_idx and new_wp_idx < total_wp:
+                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
+                    st.session_state.comm_logger.log_waypoint_reached(new_wp_idx, total_wp)
+                    st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WP_REACHED_ACK #{new_wp_idx}")
+                    st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: MISSION_ITEM_REACHED #{new_wp_idx}")
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC: MISSION_CURRENT #{new_wp_idx+1}")
+                    st.session_state.recv_log.append(f"[{timestamp}] OBC→GCS: WP_REACHED #{new_wp_idx}")
+                
+                # 遥测数据
+                if st.session_state.drone_pos_index % 5 == 0:
+                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
+                    pos = st.session_state.drone_position
+                    alt = st.session_state.all_flight_positions[st.session_state.drone_pos_index][2] if len(st.session_state.all_flight_positions[0]) > 2 else 50
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: TELEMETRY lat={pos[0]:.6f} lon={pos[1]:.6f} alt={alt:.1f} spd={flight_speed:.1f}")
+                
+                time.sleep(0.08)
+                st.rerun()
+            else:
+                # 任务完成
+                st.session_state.mission_executing = False
+                st.session_state.comm_logger.log_flight_complete()
+                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_COMPLETE")
+                st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: CMD_LAND")
+                st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: MISSION_ACK | Mode: LOITER")
+                st.success("🎉 任务执行完成！")
 
 
 
