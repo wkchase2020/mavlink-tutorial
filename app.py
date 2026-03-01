@@ -292,6 +292,12 @@ class Obstacle:
     
     def line_intersects(self, p1, p2):
         """检查线段是否与障碍物相交"""
+        # 【关键修复】确保p1, p2是tuple格式 (lat, lon)
+        if hasattr(p1, 'lat'):
+            p1 = (p1.lat, p1.lon)
+        if hasattr(p2, 'lat'):
+            p2 = (p2.lat, p2.lon)
+        
         if self.type == "circle":
             # 检查线段上多个采样点
             num_samples = 30
@@ -2200,12 +2206,4 @@ elif page == "✈️ 飞行监控":
                     for log in list(st.session_state.recv_log)[-8:]:
                         recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
                 else:
-                    recv_html += "<div style='color:#999'>暂无接收记录</div>"
-                recv_html += "</div>"
-                st.html(recv_html)
-
-
-
-
-st.markdown("---")
-st.caption("MAVLink GCS v6.0 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
+                    recv_html += "<div style=
