@@ -167,14 +167,25 @@ st.set_page_config(
 # ==================== 几何工具函数 ====================
 def point_in_polygon(lat, lon, polygon_points):
     """射线法判断点是否在多边形内"""
+    # 【关键修复】确保参数是数字类型
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except (TypeError, ValueError):
+        return False
+    
     n = len(polygon_points)
     if n < 3:
         return False
     inside = False
     j = n - 1
     for i in range(n):
-        yi, xi = polygon_points[i][0], polygon_points[i][1]
-        yj, xj = polygon_points[j][0], polygon_points[j][1]
+        try:
+            yi, xi = float(polygon_points[i][0]), float(polygon_points[i][1])
+            yj, xj = float(polygon_points[j][0]), float(polygon_points[j][1])
+        except (TypeError, ValueError, IndexError):
+            j = i
+            continue
         
         # 检查边是否与射线相交（水平边跳过）
         if (yi > lat) != (yj > lat):
