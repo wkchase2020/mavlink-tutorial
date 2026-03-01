@@ -1,4 +1,5 @@
-﻿import streamlit as st
+import streamlit as st
+import streamlit.components.v1 as components
 import time
 import math
 import heapq
@@ -167,33 +168,16 @@ st.set_page_config(
 # ==================== 几何工具函数 ====================
 def point_in_polygon(lat, lon, polygon_points):
     """射线法判断点是否在多边形内"""
-    # 【关键修复】确保参数是数字类型
-    try:
-        lat = float(lat)
-        lon = float(lon)
-    except (TypeError, ValueError):
-        return False
-    
     n = len(polygon_points)
     if n < 3:
         return False
     inside = False
     j = n - 1
     for i in range(n):
-        try:
-            yi, xi = float(polygon_points[i][0]), float(polygon_points[i][1])
-            yj, xj = float(polygon_points[j][0]), float(polygon_points[j][1])
-        except (TypeError, ValueError, IndexError):
-            j = i
-            continue
-        
-        # 检查边是否与射线相交（水平边跳过）
-        if (yi > lat) != (yj > lat):
-            # 避免除以零（水平边已在上面排除）
-            if yj != yi:
-                x_intersect = (xj - xi) * (lat - yi) / (yj - yi) + xi
-                if lon < x_intersect:
-                    inside = not inside
+        yi, xi = polygon_points[i][0], polygon_points[i][1]
+        yj, xj = polygon_points[j][0], polygon_points[j][1]
+        if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi):
+            inside = not inside
         j = i
     return inside
 
@@ -303,12 +287,6 @@ class Obstacle:
     
     def line_intersects(self, p1, p2):
         """检查线段是否与障碍物相交"""
-        # 【关键修复】确保p1, p2是tuple格式 (lat, lon)
-        if hasattr(p1, 'lat'):
-            p1 = (p1.lat, p1.lon)
-        if hasattr(p2, 'lat'):
-            p2 = (p2.lat, p2.lon)
-        
         if self.type == "circle":
             # 检查线段上多个采样点
             num_samples = 30
@@ -445,108 +423,97 @@ class GridPathPlanner:
     
     def plan_takeoff_escape(self, start_wp, flight_alt):
         """
-        起飞位置在障碍物内时，寻找最近的避让点
-        返回: (escape_waypoint, message) 或 (None, error_message)
+        【新增】规划起飞避让路径 - 当起点在障碍物内时，先飞出来
+        尝试向四个正方向寻找最近的出口
         """
         start = (start_wp.lat, start_wp.lon)
         
-        # 在多个方向上搜索最近的避让点
-        search_angles = list(range(0, 360, 15))  # 每15度一个方向
-        best_point = None
-        best_distance = float('inf')
-        best_obstacle = None
+        # 检查是否真的在障碍物内
+        if not self.is_collision(start[0], start[1], flight_alt):
+            return None, "起点不在障碍物内，无需避让起飞"
         
-        # 【关键修复】找出包含起点的障碍物（使用safety_margin，与is_collision一致）
-        for obs in self.obstacles:
-            if obs.is_inside(start[0], start[1], self.safety_margin):
-                best_obstacle = obs
-                break
+        # 寻找最近的出口方向
+        directions = [
+            (0, 1),    # 北
+            (0, -1),   # 南
+            (1, 0),    # 东
+            (-1, 0),   # 西
+            (1, 1),    # 东北
+            (1, -1),   # 东南
+            (-1, 1),   # 西北
+            (-1, -1),  # 西南
+        ]
         
-        if best_obstacle is None:
-            return None, "无法确定包含起点的障碍物"
+        best_exit = None
+        best_dist = float('inf')
         
-        # 【关键修复】获取障碍物的安全边界半径（包含safety_margin）
-        if best_obstacle.type == "circle":
-            # 障碍物半径 + 安全边距
-            total_radius_m = best_obstacle.radius + self.safety_margin
-            obs_radius_deg = total_radius_m / 111000  # 米转度
-        else:
-            # 多边形使用默认半径 + 安全边距
-            total_radius_m = 55 + self.safety_margin  # 默认55米 + 安全边距
-            obs_radius_deg = total_radius_m / 111000
-        
-        # 从不同方向搜索安全点
-        for angle in search_angles:
-            rad = math.radians(angle)
-            # 从障碍物边界外开始搜索（使用包含安全边距的半径）
-            for dist_factor in [1.2, 1.5, 2.0, 2.5, 3.0]:
-                escape_lat = best_obstacle.center_lat + math.cos(rad) * obs_radius_deg * dist_factor
-                escape_lon = best_obstacle.center_lon + math.sin(rad) * obs_radius_deg * dist_factor
+        for dlat, dlon in directions:
+            # 沿该方向逐步搜索，直到找到安全点
+            for step in range(1, 50):  # 最多搜索50步
+                test_lat = start[0] + dlat * step * 0.0001  # 约11米/步
+                test_lon = start[1] + dlon * step * 0.0001 / math.cos(math.radians(start[0]))
                 
-                if not self.is_collision(escape_lat, escape_lon, flight_alt):
-                    dist = math.sqrt((escape_lat - start[0])**2 + (escape_lon - start[1])**2)
-                    if dist < best_distance:
-                        best_distance = dist
-                        best_point = (escape_lat, escape_lon)
+                if not self.is_collision(test_lat, test_lon, flight_alt):
+                    # 找到出口，计算距离
+                    dist = self.haversine_distance(start[0], start[1], test_lat, test_lon)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_exit = (test_lat, test_lon)
                     break
         
-        if best_point:
-            escape_wp = Waypoint("避让点", best_point[0], best_point[1], flight_alt)
-            dist_m = best_distance * 111000  # 转换为米
-            return escape_wp, "先飞行约{:.0f}米至避让点".format(dist_m)
-        else:
-            return None, "附近未找到合适的避让点，请移除起点附近障碍物"
+        if best_exit:
+            # 构建起飞避让路径：起点 → 出口点 → 终点
+            escape_wp = Waypoint(best_exit[0], best_exit[1], flight_alt, 16, 1)
+            return escape_wp, f"起飞避让路径: 先向安全区域飞行{best_dist:.1f}米"
+        
+        return None, "无法找到起飞避让出口"
     
     def plan_landing_approach(self, end_wp, flight_alt):
         """
-        终点在障碍物内时，寻找最近的悬停点
-        返回: (hover_waypoint, message) 或 (None, error_message)
+        【新增】规划终点悬停路径 - 当终点在障碍物内时，找最近的安全悬停点
+        尝试向四个正方向寻找最近的入口点（离终点最近的安全点）
         """
         end = (end_wp.lat, end_wp.lon)
         
-        # 【关键修复】找出包含终点的障碍物（使用safety_margin，与is_collision一致）
-        target_obstacle = None
-        for obs in self.obstacles:
-            if obs.is_inside(end[0], end[1], self.safety_margin):
-                target_obstacle = obs
-                break
+        # 检查是否真的在障碍物内
+        if not self.is_collision(end[0], end[1], flight_alt):
+            return None, "终点不在障碍物内，无需悬停接近"
         
-        if target_obstacle is None:
-            return None, "无法确定包含终点的障碍物"
+        # 寻找最近的入口方向（从终点向外）
+        directions = [
+            (0, 1),    # 北
+            (0, -1),   # 南
+            (1, 0),    # 东
+            (-1, 0),   # 西
+            (1, 1),    # 东北
+            (1, -1),   # 东南
+            (-1, 1),   # 西北
+            (-1, -1),  # 西南
+        ]
         
-        # 【关键修复】获取障碍物的安全边界半径（包含safety_margin）
-        if target_obstacle.type == "circle":
-            total_radius_m = target_obstacle.radius + self.safety_margin
-            obs_radius_deg = total_radius_m / 111000  # 米转度
-        else:
-            total_radius_m = 55 + self.safety_margin  # 默认55米 + 安全边距
-            obs_radius_deg = total_radius_m / 111000
+        best_entry = None
+        best_dist = float('inf')
         
-        # 搜索最近的安全点作为悬停点
-        search_angles = list(range(0, 360, 10))
-        best_point = None
-        best_distance = float('inf')
-        
-        for angle in search_angles:
-            rad = math.radians(angle)
-            # 从障碍物边界外开始搜索（使用包含安全边距的半径）
-            for dist_factor in [1.2, 1.5, 2.0, 2.5, 3.0]:
-                hover_lat = target_obstacle.center_lat + math.cos(rad) * obs_radius_deg * dist_factor
-                hover_lon = target_obstacle.center_lon + math.sin(rad) * obs_radius_deg * dist_factor
+        for dlat, dlon in directions:
+            # 沿该方向逐步搜索，直到找到安全点
+            for step in range(1, 50):  # 最多搜索50步
+                test_lat = end[0] + dlat * step * 0.0001  # 约11米/步
+                test_lon = end[1] + dlon * step * 0.0001 / math.cos(math.radians(end[0]))
                 
-                if not self.is_collision(hover_lat, hover_lon, flight_alt):
-                    dist = math.sqrt((hover_lat - end[0])**2 + (hover_lon - end[1])**2)
-                    if dist < best_distance:
-                        best_distance = dist
-                        best_point = (hover_lat, hover_lon)
+                if not self.is_collision(test_lat, test_lon, flight_alt):
+                    # 找到入口，计算到终点的距离
+                    dist = self.haversine_distance(test_lat, test_lon, end[0], end[1])
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_entry = (test_lat, test_lon)
                     break
         
-        if best_point:
-            hover_wp = Waypoint("悬停点", best_point[0], best_point[1], flight_alt)
-            dist_m = best_distance * 111000
-            return hover_wp, "在目标点{:.0f}米外安全悬停".format(dist_m)
-        else:
-            return None, "终点附近未找到安全悬停点"
+        if best_entry:
+            # 构建悬停点
+            hover_wp = Waypoint(best_entry[0], best_entry[1], flight_alt, 16, 0)
+            return hover_wp, f"终点悬停: 在距离终点{best_dist:.1f}米处悬停"
+        
+        return None, "无法找到合适的终点悬停点"
     
     def plan_horizontal_avoidance(self, start_wp, end_wp, bias=0):
         """
@@ -563,38 +530,39 @@ class GridPathPlanner:
         if self.is_collision(start[0], start[1], flight_alt):
             escape_wp, escape_msg = self.plan_takeoff_escape(start_wp, flight_alt)
             if escape_wp is None:
-                return None, "起点在障碍物安全边界内，且{}".format(escape_msg)
-            # 检查终点
+                return None, f"起点在障碍物安全边界内，且{escape_msg}"
+            # 成功找到起飞避让点，继续规划从避让点到终点的路径
+            # 【修改】处理终点在障碍物内的情况
             if self.is_collision(end[0], end[1], flight_alt):
                 hover_wp, hover_msg = self.plan_landing_approach(end_wp, flight_alt)
                 if hover_wp is None:
-                    return None, "起点需避让，但{}".format(hover_msg)
+                    return None, f"起点需避让，但{hover_msg}"
                 # 规划到悬停点的路径
                 result, msg = self._plan_path_from_escape(escape_wp, hover_wp, flight_alt, bias)
                 if result:
                     full_path = [start_wp, escape_wp] + result[1:]
-                    return full_path, "【起飞避让+终点悬停】{}，飞行至目标附近后{}".format(escape_msg, hover_msg)
+                    return full_path, f"【起飞避让+终点悬停】{escape_msg}，飞行至目标附近后{hover_msg}"
                 else:
-                    return None, "起飞避让成功，但到悬停点路径规划失败"
+                    return None, f"起飞避让成功，但到悬停点路径规划失败"
             # 终点安全，正常规划
             result, msg = self._plan_path_from_escape(escape_wp, end_wp, flight_alt, bias)
             if result:
                 full_path = [start_wp, escape_wp] + result[1:]
-                return full_path, "【起飞避让】{}，然后{}".format(escape_msg, msg)
+                return full_path, f"【起飞避让】{escape_msg}，然后{msg}"
             else:
-                return None, "起飞避让成功，但后续路径规划失败: {}".format(msg)
+                return None, f"起飞避让成功，但后续路径规划失败: {msg}"
         
         # 【修改】处理终点在障碍物内的情况 - 寻找悬停点
         if self.is_collision(end[0], end[1], flight_alt):
             hover_wp, hover_msg = self.plan_landing_approach(end_wp, flight_alt)
             if hover_wp is None:
-                return None, "终点在障碍物安全边界内，且{}".format(hover_msg)
+                return None, f"终点在障碍物安全边界内，且{hover_msg}"
             # 规划到悬停点的路径
             result, msg = self._plan_path_from_start(start_wp, hover_wp, flight_alt, bias)
             if result:
-                return result, "【终点悬停】{}，到达后{}".format(msg, hover_msg)
+                return result, f"【终点悬停】{msg}，到达后{hover_msg}"
             else:
-                return None, "到悬停点路径规划失败: {}".format(msg)
+                return None, f"到悬停点路径规划失败: {msg}"
         
         # 【关键】首先检查直线路径是否安全
         if not self.line_hits_obstacle(start, end, flight_alt):
@@ -606,10 +574,12 @@ class GridPathPlanner:
         # 根据偏向调整边界框（实现左右绕行）
         lat_range = lat_max - lat_min
         lon_range = lon_max - lon_min
-        if bias < 0:  # 左偏 - 扩展西侧边界
-            lon_min -= lon_range * 0.3
-        elif bias > 0:  # 右偏 - 扩展东侧边界
-            lon_max += lon_range * 0.3
+        if bias < 0:  # 左偏 - 大幅扩展西侧边界
+            lon_min -= lon_range * 0.5
+            lon_max -= lon_range * 0.1  # 收缩东侧
+        elif bias > 0:  # 右偏 - 大幅扩展东侧边界
+            lon_max += lon_range * 0.5
+            lon_min += lon_range * 0.1  # 收缩西侧
         
         base_lat = lat_min
         base_lon = lon_min
@@ -701,12 +671,15 @@ class GridPathPlanner:
                 h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
                 
                 # 【关键】添加绕行偏向到启发函数
-                # bias < 0 (左偏/西): 鼓励向西走 (nx较小)
-                # bias > 0 (右偏/东): 鼓励向东走 (nx较大)
-                if bias < 0:  # 左绕行 - 优先选择西侧(x较小)的路径
-                    h += (nx - start_grid[0]) * self.grid_size * 0.3
-                elif bias > 0:  # 右绕行 - 优先选择东侧(x较大)的路径
-                    h += (start_grid[0] - nx) * self.grid_size * 0.3
+                # bias < 0 (左偏): 鼓励向西(nx较小)，惩罚向东(nx较大)
+                # bias > 0 (右偏): 鼓励向东(nx较大)，惩罚向西(nx较小)
+                dx_from_start = nx - start_grid[0]
+                if bias < 0:  # 左绕行 - 优先向西
+                    # 向东移动(nx大)时增加成本，向西移动(nx小)时减少成本
+                    h += dx_from_start * self.grid_size * 0.8
+                elif bias > 0:  # 右绕行 - 优先向东
+                    # 向西移动(nx小)时增加成本，向东移动(nx大)时减少成本
+                    h -= dx_from_start * self.grid_size * 0.8
                 
                 heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
         
@@ -719,24 +692,29 @@ class GridPathPlanner:
         
         return None, "无法找到可行的绕行路径"
     
-    def _astar_path(self, start_wp, end_wp, flight_alt, bias=0):
+    def _plan_path_from_start(self, start_wp, hover_wp, flight_alt, bias=0):
         """
-        核心A*路径规划算法
-        返回: (waypoints_list, message) 或 (None, error_message)
+        【辅助方法】从起点规划到终点悬停点的路径
+        这是 plan_horizontal_avoidance 的简化版本，终点是悬停点
         """
         start = (start_wp.lat, start_wp.lon)
-        end = (end_wp.lat, end_wp.lon)
+        end = (hover_wp.lat, hover_wp.lon)
         
-        # 获取包含障碍物的边界框
+        # 检查直线路径
+        if not self.line_hits_obstacle(start, end, flight_alt):
+            return [start_wp, hover_wp], "直线路径安全"
+        
+        # 复用主规划逻辑
         lat_min, lat_max, lon_min, lon_max = self.get_bounding_box_with_obstacles(start, end)
         
-        # 根据偏向调整边界框
         lat_range = lat_max - lat_min
         lon_range = lon_max - lon_min
-        if bias < 0:  # 左偏
-            lon_min -= lon_range * 0.3
-        elif bias > 0:  # 右偏
-            lon_max += lon_range * 0.3
+        if bias < 0:
+            lon_min -= lon_range * 0.5
+            lon_max -= lon_range * 0.1
+        elif bias > 0:
+            lon_max += lon_range * 0.5
+            lon_min += lon_range * 0.1
         
         base_lat = lat_min
         base_lon = lon_min
@@ -744,7 +722,6 @@ class GridPathPlanner:
         start_grid = self.latlon_to_grid(start[0], start[1], base_lat, base_lon)
         end_grid = self.latlon_to_grid(end[0], end[1], base_lat, base_lon)
         
-        # 24方向搜索
         directions = [
             (0,1), (1,0), (0,-1), (-1,0),
             (1,1), (1,-1), (-1,1), (-1,-1),
@@ -764,9 +741,108 @@ class GridPathPlanner:
             iteration += 1
             f_cost, g_cost, x, y, path = heapq.heappop(open_set)
             
-            # 检查是否到达终点
             if abs(x - end_grid[0]) <= 2 and abs(y - end_grid[1]) <= 2:
                 waypoints = [start_wp]
+                for grid in path[1:]:
+                    lat, lon = self.grid_to_latlon(grid[0], grid[1], base_lat, base_lon)
+                    waypoints.append(Waypoint(lat, lon, flight_alt, 16, len(waypoints)))
+                waypoints.append(hover_wp)
+                waypoints[-1].seq = len(waypoints) - 1
+                waypoints = self.smooth_path(waypoints, flight_alt)
+                
+                if self.validate_path(waypoints, flight_alt):
+                    current_dist = sum(self.haversine_distance(
+                        waypoints[i].lat, waypoints[i].lon, 
+                        waypoints[i+1].lat, waypoints[i+1].lon) for i in range(len(waypoints)-1))
+                    if current_dist < best_dist:
+                        best_dist = current_dist
+                        best_path = waypoints
+                if iteration > 10000:
+                    break
+                continue
+            
+            key = (x, y)
+            if key in visited and visited[key] <= g_cost:
+                continue
+            visited[key] = g_cost
+            
+            for dx, dy in directions:
+                nx, ny = x + dx, y + dy
+                lat, lon = self.grid_to_latlon(nx, ny, base_lat, base_lon)
+                if not (lat_min <= lat <= lat_max and lon_min <= lon <= lon_max):
+                    continue
+                if self.is_collision(lat, lon, flight_alt):
+                    continue
+                curr_lat, curr_lon = self.grid_to_latlon(x, y, base_lat, base_lon)
+                if self.line_hits_obstacle((curr_lat, curr_lon), (lat, lon), flight_alt):
+                    continue
+                move_cost = math.sqrt(dx**2 + dy**2) * self.grid_size
+                new_g_cost = g_cost + move_cost
+                if (nx, ny) in visited and visited[(nx, ny)] <= new_g_cost:
+                    continue
+                h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
+                if bias < 0:
+                    h += (nx - start_grid[0]) * self.grid_size * 0.8
+                elif bias > 0:
+                    h -= (nx - start_grid[0]) * self.grid_size * 0.8
+                heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
+        
+        if best_path is not None:
+            if self.validate_path(best_path, flight_alt):
+                return best_path, "规划成功"
+        return None, "无法找到可行路径"
+    
+    def _plan_path_from_escape(self, escape_wp, end_wp, flight_alt, bias=0):
+        """
+        【辅助方法】从起飞避让点规划到终点的路径
+        这是 plan_horizontal_avoidance 的简化版本，起点已经确保安全
+        """
+        start = (escape_wp.lat, escape_wp.lon)
+        end = (end_wp.lat, end_wp.lon)
+        
+        # 检查直线路径
+        if not self.line_hits_obstacle(start, end, flight_alt):
+            return [escape_wp, end_wp], "直线路径安全"
+        
+        # 复用主规划逻辑
+        lat_min, lat_max, lon_min, lon_max = self.get_bounding_box_with_obstacles(start, end)
+        
+        lat_range = lat_max - lat_min
+        lon_range = lon_max - lon_min
+        if bias < 0:
+            lon_min -= lon_range * 0.5
+            lon_max -= lon_range * 0.1
+        elif bias > 0:
+            lon_max += lon_range * 0.5
+            lon_min += lon_range * 0.1
+        
+        base_lat = lat_min
+        base_lon = lon_min
+        
+        start_grid = self.latlon_to_grid(start[0], start[1], base_lat, base_lon)
+        end_grid = self.latlon_to_grid(end[0], end[1], base_lat, base_lon)
+        
+        directions = [
+            (0,1), (1,0), (0,-1), (-1,0),
+            (1,1), (1,-1), (-1,1), (-1,-1),
+            (0,2), (2,0), (0,-2), (-2,0),
+            (2,2), (2,-2), (-2,2), (-2,-2),
+            (0,3), (3,0), (0,-3), (-3,0),
+            (1,2), (2,1), (-1,2), (-2,1), (1,-2), (2,-1), (-1,-2), (-2,-1),
+        ]
+        
+        open_set = [(0, 0, start_grid[0], start_grid[1], [start_grid])]
+        visited = {}
+        iteration = 0
+        best_path = None
+        best_dist = float('inf')
+        
+        while open_set and iteration < self.max_iterations:
+            iteration += 1
+            f_cost, g_cost, x, y, path = heapq.heappop(open_set)
+            
+            if abs(x - end_grid[0]) <= 2 and abs(y - end_grid[1]) <= 2:
+                waypoints = [escape_wp]
                 for grid in path[1:]:
                     lat, lon = self.grid_to_latlon(grid[0], grid[1], base_lat, base_lon)
                     waypoints.append(Waypoint(lat, lon, flight_alt, 16, len(waypoints)))
@@ -806,9 +882,9 @@ class GridPathPlanner:
                     continue
                 h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
                 if bias < 0:
-                    h += (nx - start_grid[0]) * self.grid_size * 0.3
+                    h += (nx - start_grid[0]) * self.grid_size * 0.8
                 elif bias > 0:
-                    h += (start_grid[0] - nx) * self.grid_size * 0.3
+                    h -= (nx - start_grid[0]) * self.grid_size * 0.8
                 heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
         
         if best_path is not None:
@@ -816,153 +892,54 @@ class GridPathPlanner:
                 return best_path, "规划成功"
         return None, "无法找到可行路径"
     
-    def _plan_path_from_escape(self, escape_wp, end_wp, flight_alt, bias=0):
-        """从避让点到终点的路径规划"""
-        start = (escape_wp.lat, escape_wp.lon)
-        end = (end_wp.lat, end_wp.lon)
-        
-        # 检查直线路径是否安全
-        if not self.line_hits_obstacle(start, end, flight_alt):
-            return [escape_wp, end_wp], "直飞至目标点"
-        
-        # 使用A*规划绕行
-        return self._astar_path(escape_wp, end_wp, flight_alt, bias)
-    
-    def _plan_path_from_start(self, start_wp, hover_wp, flight_alt, bias=0):
-        """从起点到悬停点的路径规划"""
-        start = (start_wp.lat, start_wp.lon)
-        end = (hover_wp.lat, hover_wp.lon)
-        
-        # 检查直线路径是否安全
-        if not self.line_hits_obstacle(start, end, flight_alt):
-            return [start_wp, hover_wp], "直飞至悬停点"
-        
-        # 使用A*规划绕行
-        return self._astar_path(start_wp, hover_wp, flight_alt, bias)
-    
     def plan_multiple_paths(self, start_wp, end_wp, max_altitude):
         """规划多条路径供选择"""
         paths = {}
-        error_msgs = []
-        
-        # 【关键】检查起点和终点是否在障碍物内
-        start = (start_wp.lat, start_wp.lon)
-        end = (end_wp.lat, end_wp.lon)
-        flight_alt = start_wp.alt
-        
-        start_in_obs = self.is_collision(start[0], start[1], flight_alt)
-        end_in_obs = self.is_collision(end[0], end[1], flight_alt)
-        
-        escape_wp = None
-        hover_wp = None
-        
-        if start_in_obs:
-            # 尝试规划起飞避让
-            escape_wp, escape_msg = self.plan_takeoff_escape(start_wp, flight_alt)
-            if escape_wp is None:
-                return {}, "起点在障碍物安全边界内，且{}".format(escape_msg)
-        
-        if end_in_obs:
-            # 尝试规划终点悬停
-            hover_wp, hover_msg = self.plan_landing_approach(end_wp, flight_alt)
-            if hover_wp is None:
-                return {}, "终点在障碍物安全边界内，且{}".format(hover_msg)
-        
-        # 确定实际使用的起点和终点
-        actual_start = escape_wp if escape_wp else start_wp
-        actual_end = hover_wp if hover_wp else end_wp
         
         # 1. 左绕行
-        left_path, left_msg = self._plan_single_path(actual_start, actual_end, flight_alt, bias=-1)
+        left_path, left_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=-1)
         if left_path:
-            # 如果使用了避让点/悬停点，添加前缀
-            if escape_wp and hover_wp:
-                name = '⬅️ 左侧(避让+悬停)'
-                left_path = [start_wp, escape_wp] + left_path[1:-1] + [hover_wp, end_wp]
-            elif escape_wp:
-                name = '⬅️ 左侧(需避让)'
-                left_path = [start_wp, escape_wp] + left_path[1:]
-            elif hover_wp:
-                name = '⬅️ 左侧(需悬停)'
-                left_path = left_path[:-1] + [hover_wp, end_wp]
-            else:
-                name = '⬅️ 左侧绕行'
-            
             paths['left'] = {
                 'path': left_path,
-                'name': name,
+                'name': '⬅️ 左侧绕行',
                 'distance': sum(self.haversine_distance(
                     left_path[i].lat, left_path[i].lon,
                     left_path[i+1].lat, left_path[i+1].lon) for i in range(len(left_path)-1)),
-                'type': 'horizontal',
-                'msg': left_msg
+                'type': 'horizontal'
             }
-        else:
-            error_msgs.append("左绕行: {}".format(left_msg))
         
         # 2. 右绕行
-        right_path, right_msg = self._plan_single_path(actual_start, actual_end, flight_alt, bias=1)
+        right_path, right_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=1)
         if right_path:
-            if escape_wp and hover_wp:
-                name = '➡️ 右侧(避让+悬停)'
-                right_path = [start_wp, escape_wp] + right_path[1:-1] + [hover_wp, end_wp]
-            elif escape_wp:
-                name = '➡️ 右侧(需避让)'
-                right_path = [start_wp, escape_wp] + right_path[1:]
-            elif hover_wp:
-                name = '➡️ 右侧(需悬停)'
-                right_path = right_path[:-1] + [hover_wp, end_wp]
-            else:
-                name = '➡️ 右侧绕行'
-            
             paths['right'] = {
                 'path': right_path,
-                'name': name,
+                'name': '➡️ 右侧绕行',
                 'distance': sum(self.haversine_distance(
                     right_path[i].lat, right_path[i].lon,
                     right_path[i+1].lat, right_path[i+1].lon) for i in range(len(right_path)-1)),
-                'type': 'horizontal',
-                'msg': right_msg
+                'type': 'horizontal'
             }
-        else:
-            error_msgs.append("右绕行: {}".format(right_msg))
         
         # 3. 最优绕行
-        best_path, best_msg = self._plan_single_path(actual_start, actual_end, flight_alt, bias=0)
-        if best_path and len(best_path) == 2 and not escape_wp and not hover_wp:  # 直线路径
+        best_path, best_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=0)
+        if best_path and len(best_path) == 2:  # 直线路径
             paths['direct'] = {
                 'path': best_path,
                 'name': '⬆️ 直线飞行',
                 'distance': sum(self.haversine_distance(
                     best_path[i].lat, best_path[i].lon,
                     best_path[i+1].lat, best_path[i+1].lon) for i in range(len(best_path)-1)),
-                'type': 'direct',
-                'msg': best_msg
+                'type': 'direct'
             }
         elif best_path:
-            if escape_wp and hover_wp:
-                name = '✨ 最优(避让+悬停)'
-                best_path = [start_wp, escape_wp] + best_path[1:-1] + [hover_wp, end_wp]
-            elif escape_wp:
-                name = '✨ 最优(需避让)'
-                best_path = [start_wp, escape_wp] + best_path[1:]
-            elif hover_wp:
-                name = '✨ 最优(需悬停)'
-                best_path = best_path[:-1] + [hover_wp, end_wp]
-            else:
-                name = '✨ 最优绕行'
-            
             paths['best'] = {
                 'path': best_path,
-                'name': name,
+                'name': '✨ 最优绕行',
                 'distance': sum(self.haversine_distance(
                     best_path[i].lat, best_path[i].lon,
                     best_path[i+1].lat, best_path[i+1].lon) for i in range(len(best_path)-1)),
-                'type': 'horizontal',
-                'msg': best_msg
+                'type': 'horizontal'
             }
-        else:
-            error_msgs.append("最优: {}".format(best_msg))
         
         # 4. 爬升飞越（如果可行）
         climb_path = self.plan_climb_over(start_wp, end_wp, max_altitude)
@@ -978,112 +955,7 @@ class GridPathPlanner:
                 'type': 'climb'
             }
         
-        # 如果没有找到任何路径，返回错误信息
-        if not paths and error_msgs:
-            return {}, "; ".join(error_msgs)
-        
         return paths
-    
-    def _plan_single_path(self, start_wp, end_wp, flight_alt, bias=0):
-        """
-        规划单条路径（不处理起飞避让/终点悬停，由上层处理）
-        返回: (waypoints_list, message) 或 (None, error_message)
-        """
-        start = (start_wp.lat, start_wp.lon)
-        end = (end_wp.lat, end_wp.lon)
-        
-        # 【关键】检查直线路径是否安全
-        if not self.line_hits_obstacle(start, end, flight_alt):
-            return [start_wp, end_wp], "直线路径安全"
-        
-        # 获取包含障碍物的边界框
-        lat_min, lat_max, lon_min, lon_max = self.get_bounding_box_with_obstacles(start, end)
-        
-        # 根据偏向调整边界框
-        lat_range = lat_max - lat_min
-        lon_range = lon_max - lon_min
-        if bias < 0:  # 左偏
-            lon_min -= lon_range * 0.3
-        elif bias > 0:  # 右偏
-            lon_max += lon_range * 0.3
-        
-        base_lat = lat_min
-        base_lon = lon_min
-        
-        start_grid = self.latlon_to_grid(start[0], start[1], base_lat, base_lon)
-        end_grid = self.latlon_to_grid(end[0], end[1], base_lat, base_lon)
-        
-        # 24方向搜索
-        directions = [
-            (0,1), (1,0), (0,-1), (-1,0),
-            (1,1), (1,-1), (-1,1), (-1,-1),
-            (0,2), (2,0), (0,-2), (-2,0),
-            (2,2), (2,-2), (-2,2), (-2,-2),
-            (0,3), (3,0), (0,-3), (-3,0),
-            (1,2), (2,1), (-1,2), (-2,1), (1,-2), (2,-1), (-1,-2), (-2,-1),
-        ]
-        
-        open_set = [(0, 0, start_grid[0], start_grid[1], [start_grid])]
-        visited = {}
-        iteration = 0
-        best_path = None
-        best_dist = float('inf')
-        
-        while open_set and iteration < self.max_iterations:
-            iteration += 1
-            f_cost, g_cost, x, y, path = heapq.heappop(open_set)
-            
-            # 检查是否到达终点
-            if abs(x - end_grid[0]) <= 2 and abs(y - end_grid[1]) <= 2:
-                waypoints = [start_wp]
-                for grid in path[1:]:
-                    lat, lon = self.grid_to_latlon(grid[0], grid[1], base_lat, base_lon)
-                    waypoints.append(Waypoint(lat, lon, flight_alt, 16, len(waypoints)))
-                waypoints.append(end_wp)
-                waypoints[-1].seq = len(waypoints) - 1
-                waypoints = self.smooth_path(waypoints, flight_alt)
-                
-                if self.validate_path(waypoints, flight_alt):
-                    current_dist = sum(self.haversine_distance(
-                        waypoints[i].lat, waypoints[i].lon, 
-                        waypoints[i+1].lat, waypoints[i+1].lon) for i in range(len(waypoints)-1))
-                    if current_dist < best_dist:
-                        best_dist = current_dist
-                        best_path = waypoints
-                if iteration > 10000:
-                    break
-                continue
-            
-            key = (x, y)
-            if key in visited and visited[key] <= g_cost:
-                continue
-            visited[key] = g_cost
-            
-            for dx, dy in directions:
-                nx, ny = x + dx, y + dy
-                lat, lon = self.grid_to_latlon(nx, ny, base_lat, base_lon)
-                if not (lat_min <= lat <= lat_max and lon_min <= lon <= lon_max):
-                    continue
-                if self.is_collision(lat, lon, flight_alt):
-                    continue
-                curr_lat, curr_lon = self.grid_to_latlon(x, y, base_lat, base_lon)
-                if self.line_hits_obstacle((curr_lat, curr_lon), (lat, lon), flight_alt):
-                    continue
-                move_cost = math.sqrt(dx**2 + dy**2) * self.grid_size
-                new_g_cost = g_cost + move_cost
-                if (nx, ny) in visited and visited[(nx, ny)] <= new_g_cost:
-                    continue
-                h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
-                if bias < 0:
-                    h += (nx - start_grid[0]) * self.grid_size * 0.3
-                elif bias > 0:
-                    h += (start_grid[0] - nx) * self.grid_size * 0.3
-                heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
-        
-        if best_path is not None:
-            if self.validate_path(best_path, flight_alt):
-                return best_path, "规划成功"
-        return None, "无法找到可行路径"
     
     def smooth_path(self, waypoints, flight_alt):
         """路径平滑 - 移除不必要的中间点"""
@@ -1218,6 +1090,9 @@ def init_session_state():
         'flight_start_time': None,
         # 障碍物记忆
         'saved_obstacles': [],
+        # 起飞避让和终点悬停标记
+        'has_takeoff_escape': False,
+        'has_landing_hover': False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1262,6 +1137,12 @@ with st.sidebar:
         path_name = st.session_state.get('selected_path_name', '未命名')
         st.metric("选中路径", path_name)
         st.metric("航点数量", len(st.session_state.waypoints))
+        
+        # 起飞避让和终点悬停状态
+        if st.session_state.get('has_takeoff_escape'):
+            st.warning("🚨 起飞需避让")
+        if st.session_state.get('has_landing_hover'):
+            st.info("🚁 终点需悬停")
     
     if st.session_state.get('available_paths'):
         st.metric("可选路径数", len(st.session_state['available_paths']))
@@ -1282,7 +1163,7 @@ with st.sidebar:
 
 # ==================== 航线规划页面 ====================
 if page == "🗺️ 航线规划":
-    st.title("🚁 MAVLink 地面站 - 严格避障系统 v15")
+    st.title("🚁 MAVLink 地面站 - 严格避障系统")
     st.caption("绝对安全绕行 | 严格碰撞检测 | 坐标系自动转换")
     
     # 显示安全警告
@@ -1790,6 +1671,24 @@ if page == "🗺️ 航线规划":
         
         st.markdown(f"**🧭 路径规划** ({' | '.join(plan_status)})")
         
+        # 【新增】检查起点是否在障碍物内
+        if st.session_state.point_a:
+            start_collision = st.session_state.planner.is_collision(
+                st.session_state.point_a[0], st.session_state.point_a[1], 
+                st.session_state.flight_altitude
+            )
+            if start_collision:
+                st.warning("⚠️ **起点在障碍物安全半径内！** 系统将自动规划「起飞避让」路径：先飞行至安全区域，再前往目标点。")
+        
+        # 检查终点是否在障碍物内
+        if st.session_state.point_b:
+            end_collision = st.session_state.planner.is_collision(
+                st.session_state.point_b[0], st.session_state.point_b[1],
+                st.session_state.flight_altitude
+            )
+            if end_collision:
+                st.info("ℹ️ **终点在障碍物安全半径内！** 系统将自动规划「终点悬停」路径：飞行至目标最近安全点悬停，并提示操作员。")
+        
         # 检查是否可以爬升飞越
         force_avoidance = st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude)
         can_climb = not force_avoidance
@@ -1816,17 +1715,9 @@ if page == "🗺️ 航线规划":
                 st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: NAV_TARGET ({st.session_state.point_a[0]:.6f}, {st.session_state.point_a[1]:.6f}) → ({st.session_state.point_b[0]:.6f}, {st.session_state.point_b[1]:.6f})")
                 
                 with st.spinner("🧭 正在规划多条路径..."):
-                    result = st.session_state.planner.plan_multiple_paths(
+                    all_paths = st.session_state.planner.plan_multiple_paths(
                         start_wp, end_wp, st.session_state.max_altitude
                     )
-                    
-                    # 处理新的返回值格式 (paths_dict, error_message)
-                    if isinstance(result, tuple) and len(result) == 2:
-                        all_paths, error_msg = result
-                    else:
-                        all_paths = result
-                        error_msg = ""
-                    
                     st.session_state['available_paths'] = all_paths
                     
                     if all_paths:
@@ -1837,10 +1728,7 @@ if page == "🗺️ 航线规划":
                                 v['distance'], len(v['path']), v['type']
                             )
                     else:
-                        if error_msg:
-                            st.error(f"❌ {error_msg}")
-                        else:
-                            st.error("❌ 无法找到可行路径")
+                        st.error("❌ 无法找到可行路径")
                 st.rerun()
         
         # 显示可选路径列表
@@ -1857,17 +1745,69 @@ if page == "🗺️ 航线规划":
                 col_path, col_btn = st.columns([3, 1])
                 
                 with col_path:
+                    # 检查是否包含起飞避让或终点悬停
+                    first_wp = path_info['path'][0]
+                    last_wp = path_info['path'][-1]
+                    
+                    # 起点避让：第一个航点远离起点
+                    is_escape = len(path_info['path']) > 2 and (
+                        abs(first_wp.lat - st.session_state.point_a[0]) > 0.00001 or
+                        abs(first_wp.lon - st.session_state.point_a[1]) > 0.00001
+                    )
+                    
+                    # 终点悬停：最后一个航点远离终点
+                    is_hover = len(path_info['path']) > 2 and (
+                        abs(last_wp.lat - st.session_state.point_b[0]) > 0.00001 or
+                        abs(last_wp.lon - st.session_state.point_b[1]) > 0.00001
+                    )
+                    
+                    badge = ""
+                    if is_escape and is_hover:
+                        badge = "🚨【起飞避让+终点悬停】"
+                    elif is_escape:
+                        badge = "🚨【起飞避让】"
+                    elif is_hover:
+                        badge = "🚁【终点悬停】"
+                    
                     if path_info['type'] == 'climb':
-                        st.write(f"{path_info['name']}: {path_info['distance']:.0f}m, 最高{path_info['max_altitude']:.0f}m")
+                        st.write(f"{badge}{path_info['name']}: {path_info['distance']:.0f}m, 最高{path_info['max_altitude']:.0f}m")
                     else:
-                        st.write(f"{path_info['name']}: {path_info['distance']:.0f}m, {len(path_info['path'])}个航点")
+                        st.write(f"{badge}{path_info['name']}: {path_info['distance']:.0f}m, {len(path_info['path'])}个航点")
+                    
+                    # 显示提示
+                    if is_escape and is_hover:
+                        st.warning("⚠️ 起点需避让起飞，终点需附近悬停")
+                    elif is_escape:
+                        st.warning("⚠️ 起点在障碍物安全半径内，路径包含先避让起飞阶段")
+                    elif is_hover:
+                        st.info("ℹ️ 终点在障碍物安全半径内，将在最近安全点悬停")
                 
                 with col_btn:
-                    if st.button("选择", key=f"select_{path_key}"):
+                    if is_escape and is_hover:
+                        btn_label = "选择(避让+悬停)"
+                    elif is_escape:
+                        btn_label = "选择(含避让)"
+                    elif is_hover:
+                        btn_label = "选择(含悬停)"
+                    else:
+                        btn_label = "选择"
+                    
+                    if st.button(btn_label, key=f"select_{path_key}"):
                         st.session_state.waypoints = path_info['path']
                         st.session_state.selected_path_type = path_info['type']
                         st.session_state.selected_path_name = path_info['name']
-                        st.success(f"✅ 已选择: {path_info['name']}")
+                        st.session_state.has_takeoff_escape = is_escape
+                        st.session_state.has_landing_hover = is_hover
+                        
+                        note = ""
+                        if is_escape and is_hover:
+                            note = "（含起飞避让和终点悬停）"
+                        elif is_escape:
+                            note = "（含起飞避让）"
+                        elif is_hover:
+                            note = "（含终点悬停）"
+                        
+                        st.success(f"✅ 已选择: {path_info['name']}{note}")
                         st.rerun()
         
         # 显示当前选中的路径
@@ -1899,30 +1839,314 @@ if page == "🗺️ 航线规划":
 
 # ==================== 飞行监控页面 ====================
 elif page == "✈️ 飞行监控":
-    st.title("✈️ 飞行监控 - 实时进程显示 v15")
+    st.title("🚁 飞行实时画面 - 任务执行监控")
     
     if not st.session_state.mission_sent:
-        st.warning("请先规划并上传航线")
+        st.warning("⚠️ 请先规划并上传航线")
     else:
-        total = len(st.session_state.waypoints)
+        total_wp = len(st.session_state.waypoints)
         
-        # 通信链路拓扑图
-        with st.expander("📡 通信链路拓扑与数据流", expanded=True):
-            # 节点状态控制
-            status_cols = st.columns(3)
-            with status_cols[0]:
-                gcs_active = st.checkbox("🖥️ GCS 在线", value=True, key="gcs_check_v7")
-            with status_cols[1]:
-                obc_active = st.checkbox("🧠 OBC 在线", value=True, key="obc_check_v7")
-            with status_cols[2]:
-                fcu_active = st.checkbox("⚙️ FCU 在线", value=True, key="fcu_check_v7")
+        # ==========================================
+        # 顶部控制栏 - 简化版本
+        # ==========================================
+        ctrl_cols = st.columns([2, 2, 2, 2, 2])
+        
+        with ctrl_cols[0]:
+            if not st.session_state.mission_executing:
+                if st.button("▶️ 开始任务", type="primary", use_container_width=True, key="start_btn"):
+                    st.session_state.mission_executing = True
+                    st.session_state.current_waypoint_index = 0
+                    st.session_state.flight_start_time = time.time()
+                    st.session_state.logged_waypoints = set([0])  # 起点算已完成
+                    
+                    # 简化的位置计算 - 直接记录当前目标航点
+                    st.session_state.drone_pos_index = 0
+                    st.session_state.drone_position = [
+                        st.session_state.waypoints[0].lat,
+                        st.session_state.waypoints[0].lon
+                    ]
+                    
+                    st.session_state.comm_logger.log_flight_start()
+                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                    st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_START")
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: ACK | Mode: AUTO")
+                    # 不rerun，让下面的显示逻辑处理
+            else:
+                st.button("⏳ 执行中...", disabled=True, use_container_width=True)
+        
+        with ctrl_cols[1]:
+            if st.button("⏸️ 暂停", use_container_width=True, key="pause_btn"):
+                st.session_state.mission_executing = False
+                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: PAUSE_MISSION")
+        
+        with ctrl_cols[2]:
+            if st.button("⏹️ 停止", use_container_width=True, key="stop_btn"):
+                st.session_state.mission_executing = False
+                st.session_state.current_waypoint_index = 0
+                st.session_state.logged_waypoints = set()
+        
+        with ctrl_cols[3]:
+            if st.button("🔄 重置", use_container_width=True, key="reset_btn"):
+                st.session_state.mission_executing = False
+                st.session_state.current_waypoint_index = 0
+                st.session_state.drone_position = None
+                st.session_state.flight_start_time = None
+                st.session_state.logged_waypoints = set()
+        
+        with ctrl_cols[4]:
+            status_text = "🟢 飞行中" if st.session_state.mission_executing else ("🟡 已暂停" if st.session_state.drone_position else "⚪ 就绪")
+            st.markdown(f"**{status_text}**")
+        
+        # 【修复】确保curr_idx始终有值
+        curr_idx = st.session_state.current_waypoint_index
+        
+        # ==========================================
+        # 【核心修复】基于时间的飞行推进逻辑
+        # ==========================================
+        # 【修复】计算总飞行时间：距离/速度，确保300米需要约35-40秒
+        total_distance = sum(
+            st.session_state.planner.haversine_distance(
+                st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon,
+                st.session_state.waypoints[i+1].lat, st.session_state.waypoints[i+1].lon
+            ) for i in range(len(st.session_state.waypoints)-1)
+        )
+        # 速度约8.5m/s，总飞行时间 = 距离 / 速度，每个航点时间 = 总时间 / 航段数
+        avg_speed = 8.5  # m/s
+        total_flight_time = total_distance / avg_speed  # 总飞行时间（秒）
+        segment_time = total_flight_time / max(1, total_wp - 1) if total_wp > 1 else 5  # 每个航段的飞行时间
+        
+        if st.session_state.mission_executing and st.session_state.flight_start_time:
+            elapsed = time.time() - st.session_state.flight_start_time
+            # 基于实际距离计算当前应该到达的航点
+            target_wp_idx = min(int(elapsed / segment_time), total_wp - 1)
+            
+            # 航点有变化
+            if target_wp_idx > curr_idx:
+                # 记录所有经过的航点
+                for wp_idx in range(curr_idx + 1, target_wp_idx + 1):
+                    if wp_idx not in st.session_state.logged_waypoints:
+                        st.session_state.logged_waypoints.add(wp_idx)
+                        timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                        st.session_state.comm_logger.log_waypoint_reached(wp_idx, total_wp)
+                        st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: WP_REACHED #{wp_idx}")
+                
+                st.session_state.current_waypoint_index = target_wp_idx
+                curr_idx = target_wp_idx
+                
+                # 到达终点
+                if curr_idx >= total_wp - 1:
+                    st.session_state.mission_executing = False
+                    st.session_state.comm_logger.log_flight_complete()
+                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: MISSION_COMPLETE")
+        
+        # ==========================================
+        # 实时状态显示
+        # ==========================================
+        st.markdown("---")
+        
+        flight_time = 0
+        if st.session_state.flight_start_time:
+            flight_time = int(time.time() - st.session_state.flight_start_time)
+        
+        flight_speed = 8.5
+        if st.session_state.mission_executing:
+            flight_speed = 8.5 + (0.3 if int(time.time()) % 4 < 2 else -0.2)
+        
+        # 计算剩余距离
+        remaining_dist = 0
+        for i in range(curr_idx, total_wp - 1):
+            remaining_dist += st.session_state.planner.haversine_distance(
+                st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon,
+                st.session_state.waypoints[i+1].lat, st.session_state.waypoints[i+1].lon
+            )
+        
+        eta_str = "00:00" if curr_idx >= total_wp - 1 else f"{int(remaining_dist/8.5//60):02d}:{int(remaining_dist/8.5%60):02d}"
+        progress_pct = min(100, int((curr_idx / max(1, total_wp-1)) * 100))
+        
+        # 状态卡片
+        status_cols = st.columns(6)
+        status_cols[0].metric("📍 当前航点", f"{min(curr_idx+1, total_wp)}/{total_wp}")
+        status_cols[1].metric("⚡ 飞行速度", f"{flight_speed:.1f} m/s")
+        status_cols[2].metric("⏱️ 已用时间", f"{flight_time//60:02d}:{flight_time%60:02d}")
+        status_cols[3].metric("📏 剩余距离", f"{remaining_dist:.0f} m")
+        status_cols[4].metric("🏁 预计到达", eta_str)
+        status_cols[5].metric("🔋 电量模拟", f"{max(0, 100 - flight_time//10)}%")
+        
+        st.progress(progress_pct / 100, text=f"任务进度: {progress_pct}%")
+        st.markdown("---")
+        
+        # ==========================================
+        # 主显示区域：地图 + 通信链路
+        # ==========================================
+        main_col, right_col = st.columns([3, 2])
+        
+        with main_col:
+            st.subheader("🗺️ 实时飞行地图")
+            
+            # 【简化】直接根据当前航点索引计算无人机位置
+            if st.session_state.mission_executing and st.session_state.flight_start_time:
+                elapsed = time.time() - st.session_state.flight_start_time
+                # 【修复】使用与上方相同的segment_time计算
+                current_seg = int(elapsed / segment_time)
+                seg_progress = (elapsed % segment_time) / segment_time
+                
+                current_seg = min(current_seg, total_wp - 1)
+                next_seg = min(current_seg + 1, total_wp - 1)
+                
+                # 插值计算当前位置
+                curr_wp = st.session_state.waypoints[current_seg]
+                next_wp = st.session_state.waypoints[next_seg]
+                drone_lat = curr_wp.lat + (next_wp.lat - curr_wp.lat) * seg_progress
+                drone_lon = curr_wp.lon + (next_wp.lon - curr_wp.lon) * seg_progress
+                drone_pos = [drone_lat, drone_lon]
+            elif st.session_state.drone_position:
+                drone_pos = st.session_state.drone_position
+            else:
+                drone_pos = [st.session_state.waypoints[0].lat, st.session_state.waypoints[0].lon]
+            
+            # 创建地图
+            m = folium.Map(location=drone_pos, zoom_start=17, tiles="OpenStreetMap")
+            
+            # 添加卫星图层
+            folium.TileLayer(
+                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attr='Esri',
+                name='🛰️ 卫星影像',
+                overlay=False,
+                control=True
+            ).add_to(m)
+            folium.LayerControl(position='topright').add_to(m)
+            
+            # 显示障碍物
+            for obs in st.session_state.planner.obstacles:
+                color = 'red' if obs.height >= st.session_state.flight_altitude else 'orange'
+                if obs.type == "circle":
+                    folium.Circle(
+                        [obs.center_lat, obs.center_lon],
+                        radius=obs.radius,
+                        popup=f"{obs.name}<br>高度:{obs.height}m",
+                        color=color, fill=True, fillOpacity=0.3
+                    ).add_to(m)
+                else:
+                    folium.Polygon(
+                        locations=obs.points,
+                        popup=f"{obs.name}<br>高度:{obs.height}m",
+                        color=color, fill=True, fillOpacity=0.3
+                    ).add_to(m)
+            
+            # 绘制计划航线（灰色虚线）- 【修复】任务完成后或飞行中完全隐藏
+            if st.session_state.waypoints:
+                # 【修复】更严格的显示条件：只在未开始且未设置飞行时间时显示
+                # 任务执行中或完成后都不显示计划航线
+                show_plan = not st.session_state.flight_start_time and not st.session_state.mission_executing
+                if show_plan:
+                    path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
+                    folium.PolyLine(
+                        path_coords, 
+                        color='gray', 
+                        weight=2, 
+                        opacity=0.5, 
+                        dash_array='5,10',
+                        popup="计划航线"
+                    ).add_to(m)
+                
+                # 【修复】绘制航点 - 使用logged_waypoints判断完成状态
+                logged = getattr(st.session_state, 'logged_waypoints', set())
+                for i, wp in enumerate(st.session_state.waypoints):
+                    is_completed = i in logged or i < curr_idx
+                    is_current = i == curr_idx and st.session_state.mission_executing
+                    
+                    if i == 0:
+                        folium.Marker(
+                            [wp.lat, wp.lon],
+                            icon=folium.Icon(color='green', icon='play', prefix='glyphicon'),
+                            popup=f"🚁 起点 WP{i}<br>高度: {wp.alt}m"
+                        ).add_to(m)
+                    elif i == len(st.session_state.waypoints) - 1:
+                        folium.Marker(
+                            [wp.lat, wp.lon],
+                            icon=folium.Icon(color='red', icon='stop', prefix='glyphicon'),
+                            popup=f"🎯 终点 WP{i}<br>高度: {wp.alt}m<br>状态: {'已完成' if is_completed else '待执行'}"
+                        ).add_to(m)
+                    else:
+                        color = '#4caf50' if is_completed else ('#2196f3' if is_current else '#9e9e9e')
+                        radius = 7 if is_current else 5
+                        
+                        folium.CircleMarker(
+                            [wp.lat, wp.lon],
+                            radius=radius,
+                            color=color,
+                            fill=True,
+                            fillOpacity=0.9,
+                            popup=f"航点 WP{i}<br>高度: {wp.alt}m<br>状态: {'✅已完成' if is_completed else ('🚁当前' if is_current else '⏳待执行')}"
+                        ).add_to(m)
+                
+                # 【简化】绘制已飞路径 - 从起点到当前位置
+                if curr_idx > 0 or (st.session_state.mission_executing and st.session_state.flight_start_time):
+                    flown_coords = [[st.session_state.waypoints[0].lat, st.session_state.waypoints[0].lon]]
+                    for i in range(1, curr_idx + 1):
+                        flown_coords.append([st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon])
+                    # 添加当前无人机位置
+                    flown_coords.append(drone_pos)
+                    
+                    folium.PolyLine(
+                        flown_coords,
+                        color='#00FF00',
+                        weight=5,
+                        opacity=0.9,
+                        popup="已飞路径"
+                    ).add_to(m)
+            
+            # 无人机当前位置标记
+            if st.session_state.drone_position or st.session_state.all_flight_positions:
+                # 无人机图标
+                folium.Marker(
+                    drone_pos,
+                    icon=folium.DivIcon(
+                        html='<div style="background:#ff6b00;color:white;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.4);transform:rotate(45deg);">✈</div>',
+                        icon_size=[36, 36],
+                        icon_anchor=[18, 18]
+                    ),
+                    popup=f"🚁 无人机<br>位置: ({drone_pos[0]:.6f}, {drone_pos[1]:.6f})<br>速度: {flight_speed:.1f} m/s"
+                ).add_to(m)
+                
+                # 安全半径圆圈
+                safety_m = st.session_state.planner.safety_margin
+                folium.Circle(
+                    drone_pos,
+                    radius=safety_m,
+                    color='orange',
+                    fill=True,
+                    fillOpacity=0.15,
+                    popup=f"🛡️ 安全半径: {safety_m}m"
+                ).add_to(m)
+            
+            # 渲染地图
+            st_folium(m, width=750, height=500, key="flight_monitor_map_v2")
+        
+        with right_col:
+            # ==========================================
+            # 通信链路拓扑与数据流
+            # ==========================================
+            st.subheader("📡 通信链路拓扑与数据流")
+            
+            # 节点在线状态
+            node_cols = st.columns(3)
+            with node_cols[0]:
+                gcs_online = st.checkbox("🖥️ GCS 在线", value=True, key="gcs_node_v9")
+            with node_cols[1]:
+                obc_online = st.checkbox("🧠 OBC 在线", value=True, key="obc_node_v9")
+            with node_cols[2]:
+                fcu_online = st.checkbox("⚙️ FCU 在线", value=True, key="fcu_node_v9")
             
             st.markdown("---")
             
             # 链路状态计算
-            gcs_obc_ok = gcs_active and obc_active
-            obc_fcu_ok = obc_active and fcu_active
-            gcs_fcu_ok = gcs_active and fcu_active
+            gcs_obc_ok = gcs_online and obc_online
+            obc_fcu_ok = obc_online and fcu_online
+            gcs_fcu_ok = gcs_online and fcu_online
             
             gcs_obc_status = "🟢 已连接" if gcs_obc_ok else "🔴 断开"
             obc_fcu_status = "🟢 已连接" if obc_fcu_ok else "🔴 断开"
@@ -1975,255 +2199,157 @@ elif page == "✈️ 飞行监控":
             </div>
             """
             st.html(topo_html)
-        
-        # 控制按钮
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if not st.session_state.mission_executing:
-                if st.button("▶️ 开始执行任务", type="primary", use_container_width=True):
-                    st.session_state.mission_executing = True
-                    st.session_state.current_waypoint_index = 0
-                    st.session_state.flight_path_history = []
-                    
-                    # 预计算所有飞行位置点
-                    positions = []
-                    steps_per_segment = 25  # 每段25个点，更流畅
-                    for i in range(len(st.session_state.waypoints) - 1):
-                        curr, next_wp = st.session_state.waypoints[i], st.session_state.waypoints[i + 1]
-                        for step in range(steps_per_segment):
-                            t = step / steps_per_segment
-                            positions.append([
-                                curr.lat + (next_wp.lat - curr.lat) * t,
-                                curr.lon + (next_wp.lon - curr.lon) * t
-                            ])
-                    positions.append([st.session_state.waypoints[-1].lat, st.session_state.waypoints[-1].lon])
-                    st.session_state.all_flight_positions = positions
-                    st.session_state.drone_pos_index = 0
-                    st.session_state.flight_start_time = time.time()
-                    
-                    if st.session_state.waypoints:
-                        st.session_state.drone_position = [
-                            st.session_state.waypoints[0].lat,
-                            st.session_state.waypoints[0].lon
-                        ]
-                    
-                    st.session_state.comm_logger.log_flight_start()
-                    
-                    # 记录MAVLink日志
-                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                    st.session_state.send_log.append(f"[{timestamp}] GCS→FCU: CMD_MISSION_START")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: ACK MISSION_START accepted")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: STATUS Armed | Mode: AUTO | WP: 0/{len(st.session_state.waypoints)}")
-                    
-                    st.rerun()
-            else:
-                st.button("⏳ 任务执行中...", disabled=True, use_container_width=True)
-        
-        with col2:
-            if st.button("⏹️ 紧急停止", use_container_width=True):
-                st.session_state.mission_executing = False
-                st.warning("任务已停止")
-                st.rerun()
-        
-        with col3:
-            if st.button("🔄 重置任务", use_container_width=True):
-                st.session_state.mission_executing = False
-                st.session_state.drone_position = None
-                st.session_state.current_waypoint_index = 0
-                st.session_state.flight_path_history = []
-                st.session_state.drone_pos_index = 0
-                st.session_state.all_flight_positions = []
-                st.rerun()
-        
-        # 自动推进飞行位置
-        if st.session_state.mission_executing and st.session_state.all_flight_positions:
-            idx = st.session_state.drone_pos_index
-            total_pos = len(st.session_state.all_flight_positions)
-            total_wp = len(st.session_state.waypoints)
             
-            if idx < total_pos - 1:
-                old_wp_idx = st.session_state.current_waypoint_index
-                st.session_state.drone_pos_index += 1
-                # 计算当前航点索引 (steps_per_segment=25)
-                new_wp_idx = min(st.session_state.drone_pos_index // 25, total_wp - 1)
-                st.session_state.current_waypoint_index = new_wp_idx
-                # 更新drone_position和flight_path_history
-                st.session_state.drone_position = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
-                st.session_state.flight_path_history = st.session_state.all_flight_positions[:st.session_state.drone_pos_index+1]
-                
-                # 记录航点到达日志
-                if new_wp_idx > old_wp_idx and new_wp_idx < total_wp:
-                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                    st.session_state.comm_logger.log_waypoint_reached(new_wp_idx, total_wp)
-                    # 完整的通信链路日志
-                    st.session_state.send_log.append(f"[{timestamp}] GCS→FCU: WP_ACK #{new_wp_idx}")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: WP_REACHED #{new_wp_idx}")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: TELEMETRY lat={st.session_state.drone_position[0]:.6f} lon={st.session_state.drone_position[1]:.6f} alt={st.session_state.waypoints[new_wp_idx].alt} spd=8.5")
-                
-                # 每5步记录一次遥测数据
-                if st.session_state.drone_pos_index % 5 == 0:
-                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                    pos = st.session_state.drone_position
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: HEARTBEAT lat={pos[0]:.6f} lon={pos[1]:.6f} bat=87%")
-                
-                # 0.08秒刷新，约12fps，更流畅
-                time.sleep(0.08)
-                st.rerun()
-            else:
-                st.session_state.mission_executing = False
-                st.session_state.comm_logger.log_flight_complete()
-                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                st.session_state.send_log.append(f"[{timestamp}] GCS→FCU: CMD_LAND")
-                st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: MISSION_COMPLETE")
-                st.session_state.recv_log.append(f"[{timestamp}] FCU→GCS: STATUS Disarmed | Mode: LOITER | WP: {total_wp}/{total_wp}")
-                st.success("🎉 任务执行完成！")
-        
-        # 状态显示 - 两列布局：地图 + 日志
-        main_col, log_col = st.columns([3, 2])
-        
-        with main_col:
-            curr = st.session_state.current_waypoint_index
-            total = len(st.session_state.waypoints)
+            # ==========================================
+            # 通信日志 Tab
+            # ==========================================
+            st.subheader("📋 通信日志")
             
-            if total > 0:
-                prog = min(100, int((curr / max(1, total-1)) * 100))
-                st.progress(prog)
-                cols = st.columns(4)
-                cols[0].metric("当前航点", f"{min(curr+1, total)}/{total}")
-                cols[1].metric("完成进度", f"{prog}%")
-                if st.session_state.flight_start_time:
-                    cols[2].metric("飞行时间", f"{int(time.time() - st.session_state.flight_start_time)}s")
-                cols[3].metric("速度", "8.5m/s")
-                
-                if st.session_state.mission_executing:
-                    st.info("🚁 正在执行任务...")
-                elif st.session_state.drone_position:
-                    st.warning("⏸️ 任务已暂停")
-            
-            # 地图显示 - 完整版本
-            if st.session_state.all_flight_positions and st.session_state.drone_pos_index < len(st.session_state.all_flight_positions):
-                drone_pos = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
-            else:
-                if st.session_state.waypoints:
-                    first_wp = st.session_state.waypoints[0]
-                    drone_pos = [first_wp.lat, first_wp.lon]
-                else:
-                    drone_pos = [32.0603, 118.7969]
-            
-            # 创建地图 - 使用OpenStreetMap + 卫星图层
-            m = folium.Map(location=drone_pos, zoom_start=17, tiles="OpenStreetMap")
-            
-            # 添加卫星图层
-            folium.TileLayer(
-                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                attr='Esri',
-                name='🛰️ 卫星影像',
-                overlay=False,
-                control=True
-            ).add_to(m)
-            
-            # 添加图层控制
-            folium.LayerControl(position='topright').add_to(m)
-            
-            if st.session_state.waypoints:
-                # 计划航线（灰色虚线）
-                path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
-                folium.PolyLine(path_coords, color='gray', weight=2, opacity=0.5, dash_array='5,10', popup="计划航线").add_to(m)
-                
-                # 航点详细显示
-                for i, wp in enumerate(st.session_state.waypoints):
-                    if i == 0:
-                        folium.Marker([wp.lat, wp.lon], 
-                            icon=folium.Icon(color='green', icon='play', prefix='glyphicon'),
-                            popup=f"🚁 起点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
-                    elif i == len(st.session_state.waypoints) - 1:
-                        folium.Marker([wp.lat, wp.lon], 
-                            icon=folium.Icon(color='red', icon='stop', prefix='glyphicon'),
-                            popup=f"🎯 终点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
-                    else:
-                        color = 'blue' if i > curr else 'lightgray'
-                        folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True, fillOpacity=0.8,
-                            popup=f"航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
-                
-                # 已飞路径（亮绿色实线）
-                if st.session_state.drone_pos_index > 0:
-                    flown_path = st.session_state.all_flight_positions[:st.session_state.drone_pos_index+1]
-                    folium.PolyLine(flown_path, color='#00FF00', weight=5, opacity=0.9, popup="已飞路径").add_to(m)
-            
-            # 无人机当前位置
-            folium.CircleMarker(drone_pos, radius=10, color='orange', fill=True, fillOpacity=0.9,
-                popup=f"🚁 无人机当前位置<br>({drone_pos[0]:.6f}, {drone_pos[1]:.6f})").add_to(m)
-            folium.Marker(drone_pos, 
-                icon=folium.Icon(color='orange', icon='plane', prefix='fa'),
-                popup="无人机").add_to(m)
-            
-            # 安全半径圆圈（实时更新）
-            safety_m = st.session_state.planner.safety_margin
-            folium.Circle(
-                drone_pos, 
-                radius=safety_m, 
-                color='orange', 
-                fill=True, 
-                fillOpacity=0.2,
-                popup=f"🛡️ 安全半径: {safety_m}m"
-            ).add_to(m)
-            
-            # 渲染地图
-            st_folium(m, width=750, height=550, key="flight_monitor_map")
-        
-        # 右侧：通信日志面板
-        with log_col:
-            st.subheader("📡 通信链路")
-            
-            # Tab切换：业务流程 | MAVLink收发
-            log_tab1, log_tab2 = st.tabs(["🔄 业务流程", "📡 MAVLink收发"])
+            log_tab1, log_tab2, log_tab3 = st.tabs(["🔄 业务流程", "📤 GCS→OBC→FCU", "📥 FCU→OBC→GCS"])
             
             with log_tab1:
                 logs = st.session_state.comm_logger.get_logs()
-                log_html = "<div style='max-height:380px;overflow-y:auto;font-family:monospace;font-size:11px;background:#f8f9fa;padding:8px;border-radius:5px;'>"
-                for log in reversed(logs[-15:]):
-                    bg_color = {"success": "#d4edda", "error": "#f8d7da", "warning": "#fff3cd", "info": "#e7f3ff"}.get(log['status'], "#f8f9fa")
-                    border_color = {"success": "#28a745", "error": "#dc3545", "warning": "#ffc107", "info": "#17a2b8"}.get(log['status'], "#6c757d")
-                    log_html += f"<div style='padding:4px;margin:2px 0;border-radius:3px;background:{bg_color};border-left:3px solid {border_color}'>"
-                    log_html += f"<span style='color:#666;font-size:9px'>[{log['timestamp']}]</span> "
-                    log_html += f"{log['icon']} <b>{log['msg_type']}</b><br>"
-                    log_html += f"<span style='color:#333'>{log['content']}</span><br>"
-                    log_html += f"<small style='color:#666'>{log['direction']}</small>"
-                    log_html += f"</div>"
-                log_html += "</div>"
-                st.html(log_html)
+                if logs:
+                    log_html = "<div style='max-height:280px;overflow-y:auto;font-family:monospace;font-size:10px;background:#f8f9fa;padding:8px;border-radius:5px;'>"
+                    for log in reversed(logs[-20:]):
+                        bg_color = {"success": "#d4edda", "error": "#f8d7da", "warning": "#fff3cd", "info": "#e7f3ff", "processing": "#e2e3e5"}.get(log['status'], "#f8f9fa")
+                        border_color = {"success": "#28a745", "error": "#dc3545", "warning": "#ffc107", "info": "#17a2b8", "processing": "#6c757d"}.get(log['status'], "#6c757d")
+                        log_html += f"<div style='padding:4px;margin:2px 0;border-radius:3px;background:{bg_color};border-left:3px solid {border_color};'>"
+                        log_html += f"<span style='color:#666;font-size:9px'>[{log['timestamp']}]</span> "
+                        log_html += f"{log['icon']} <b>{log['msg_type']}</b><br>"
+                        log_html += f"<span style='color:#333'>{log['content']}</span><br>"
+                        log_html += f"<small style='color:#666'>{log['direction']}</small>"
+                        log_html += f"</div>"
+                    log_html += "</div>"
+                    st.html(log_html)
+                else:
+                    st.info("暂无业务流程日志")
                 
-                if st.button("🗑️ 清除日志", key="clear_comm_log"):
+                if st.button("🗑️ 清除日志", key="clear_biz_log"):
                     st.session_state.comm_logger.clear()
                     st.rerun()
             
             with log_tab2:
-                # MAVLink发送日志
-                st.markdown("<small style='color:#0066cc'>📤 GCS → FCU (发送)</small>", unsafe_allow_html=True)
-                send_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#e7f3ff;padding:5px;border-radius:3px;'>"
+                # GCS → OBC → FCU 发送日志
+                send_html = "<div style='max-height:280px;overflow-y:auto;font-family:monospace;font-size:10px;background:#e7f3ff;padding:8px;border-radius:5px;'>"
+                send_html += "<div style='color:#0066cc;font-weight:bold;margin-bottom:5px;'>📤 GCS → OBC</div>"
                 if st.session_state.send_log:
-                    for log in list(st.session_state.send_log)[-8:]:
-                        send_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
-                else:
+                    for log in list(st.session_state.send_log)[-15:]:
+                        if '→OBC' in log or 'GCS→' in log:
+                            send_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc;'>{log}</div>"
+                send_html += "<div style='color:#e65100;font-weight:bold;margin:10px 0 5px 0;'>📤 OBC → FCU</div>"
+                if st.session_state.send_log:
+                    for log in list(st.session_state.send_log)[-15:]:
+                        if 'OBC→FCU' in log or '→FCU' in log:
+                            send_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc;'>{log}</div>"
+                if not st.session_state.send_log:
                     send_html += "<div style='color:#999'>暂无发送记录</div>"
                 send_html += "</div>"
                 st.html(send_html)
-                
-                # MAVLink接收日志
-                st.markdown("<small style='color:#cc6600'>📥 FCU → GCS (接收)</small>", unsafe_allow_html=True)
-                recv_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:5px;border-radius:3px;'>"
+            
+            with log_tab3:
+                # FCU → OBC → GCS 接收日志
+                recv_html = "<div style='max-height:280px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:8px;border-radius:5px;'>"
+                recv_html += "<div style='color:#e65100;font-weight:bold;margin-bottom:5px;'>📥 FCU → OBC</div>"
                 if st.session_state.recv_log:
-                    for log in list(st.session_state.recv_log)[-8:]:
-                        recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
-                else:
-                    recv_html += "<div style='color:#999'>[无接收记录]</div>"
+                    for log in list(st.session_state.recv_log)[-15:]:
+                        if 'FCU→' in log or '→OBC' in log:
+                            recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc;'>{log}</div>"
+                recv_html += "<div style='color:#0066cc;font-weight:bold;margin:10px 0 5px 0;'>📥 OBC → GCS</div>"
+                if st.session_state.recv_log:
+                    for log in list(st.session_state.recv_log)[-15:]:
+                        if 'OBC→GCS' in log or '→GCS' in log:
+                            recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc;'>{log}</div>"
+                if not st.session_state.recv_log:
+                    recv_html += "<div style='color:#999'>暂无接收记录</div>"
                 recv_html += "</div>"
                 st.html(recv_html)
+        
+        # ==========================================
+        # 底部：航点详细进程表
+        # ==========================================
+        st.markdown("---")
+        st.subheader("📍 航点详细进程")
+        
+        if st.session_state.waypoints:
+            # 【修复】创建航点表格数据 - 使用logged_waypoints判断完成
+            logged = getattr(st.session_state, 'logged_waypoints', set())
+            wp_data = []
+            for i, wp in enumerate(st.session_state.waypoints):
+                dist_to_next = 0
+                if i < len(st.session_state.waypoints) - 1:
+                    dist_to_next = st.session_state.planner.haversine_distance(
+                        wp.lat, wp.lon,
+                        st.session_state.waypoints[i+1].lat, st.session_state.waypoints[i+1].lon
+                    )
+                
+                # 【关键修复】使用logged_waypoints判断完成状态
+                is_completed = i in logged
+                is_current = (i == curr_idx and st.session_state.mission_executing)
+                
+                if is_completed:
+                    status = "✅ 已完成"
+                elif is_current:
+                    status = "🚁 当前"
+                else:
+                    status = "⏳ 待执行"
+                
+                # 计算ETA
+                eta = "--:--"
+                if i > curr_idx and flight_speed > 0:
+                    dist_accum = 0
+                    for j in range(curr_idx, i):
+                        if j < len(st.session_state.waypoints) - 1:
+                            dist_accum += st.session_state.planner.haversine_distance(
+                                st.session_state.waypoints[j].lat, st.session_state.waypoints[j].lon,
+                                st.session_state.waypoints[j+1].lat, st.session_state.waypoints[j+1].lon
+                            )
+                    eta_seconds = dist_accum / flight_speed
+                    eta = f"{int(eta_seconds//60):02d}:{int(eta_seconds%60):02d}"
+                
+                wp_data.append({
+                    "序号": f"WP{i}",
+                    "坐标": f"{wp.lat:.5f}, {wp.lon:.5f}",
+                    "高度": f"{wp.alt}m",
+                    "距下点": f"{dist_to_next:.0f}m" if dist_to_next > 0 else "--",
+                    "状态": status,
+                    "预计": eta
+                })
+            
+            # 显示表格
+            wp_df_cols = st.columns(len(wp_data))
+            for i, wp_info in enumerate(wp_data):
+                with wp_df_cols[i]:
+                    card_style = "background:#e8f5e9;border:2px solid #4caf50;" if "已完成" in wp_info['状态'] else \
+                                "background:#fff3e0;border:2px solid #ff9800;" if "当前" in wp_info['状态'] else \
+                                "background:#f5f5f5;border:1px solid #ddd;"
+                    
+                    # 状态卡片样式
+                    is_completed = "已完成" in wp_info['状态']
+                    is_current = "当前" in wp_info['状态']
+                    card_style = "background:#e8f5e9;border:2px solid #4caf50;" if is_completed else \
+                                "background:#fff3e0;border:2px solid #ff9800;" if is_current else \
+                                "background:#f5f5f5;border:1px solid #ddd;"
+                    
+                    st.markdown(f"""
+                    <div style="{card_style}padding:8px;border-radius:6px;text-align:center;font-size:11px;">
+                        <div style="font-weight:bold;font-size:13px;margin-bottom:4px;">{wp_info['序号']}</div>
+                        <div style="color:#666;margin-bottom:2px;">{wp_info['坐标']}</div>
+                        <div style="color:#2196f3;font-weight:bold;">{wp_info['高度']}</div>
+                        <div style="margin-top:4px;padding-top:4px;border-top:1px dashed #ccc;">
+                            <span style="font-size:10px;">{wp_info['状态']}</span>
+                        </div>
+                        <div style="font-size:9px;color:#666;margin-top:2px;">{wp_info['预计']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        # ==========================================
+        # 【已移除】自动推进逻辑已移到页面顶部
+        # 页面通过自然刷新（按钮点击等）更新状态
+        # ==========================================
 
 
 
 
 st.markdown("---")
-st.caption("MAVLink GCS v6.0 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
-
+st.caption("MAVLink GCS v1.9 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
