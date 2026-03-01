@@ -175,8 +175,14 @@ def point_in_polygon(lat, lon, polygon_points):
     for i in range(n):
         yi, xi = polygon_points[i][0], polygon_points[i][1]
         yj, xj = polygon_points[j][0], polygon_points[j][1]
-        if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi):
-            inside = not inside
+        
+        # 检查边是否与射线相交（水平边跳过）
+        if (yi > lat) != (yj > lat):
+            # 避免除以零（水平边已在上面排除）
+            if yj != yi:
+                x_intersect = (xj - xi) * (lat - yi) / (yj - yi) + xi
+                if lon < x_intersect:
+                    inside = not inside
         j = i
     return inside
 
