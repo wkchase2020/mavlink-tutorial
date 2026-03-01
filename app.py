@@ -433,26 +433,29 @@ class GridPathPlanner:
         best_distance = float('inf')
         best_obstacle = None
         
-        # 找出包含起点的障碍物
+        # 【关键修复】找出包含起点的障碍物（使用safety_margin，与is_collision一致）
         for obs in self.obstacles:
-            if obs.is_inside(start[0], start[1], 0):
+            if obs.is_inside(start[0], start[1], self.safety_margin):
                 best_obstacle = obs
                 break
         
         if best_obstacle is None:
             return None, "无法确定包含起点的障碍物"
         
-        # 获取障碍物的安全边界半径
+        # 【关键修复】获取障碍物的安全边界半径（包含safety_margin）
         if best_obstacle.type == "circle":
-            obs_radius_deg = best_obstacle.radius / 111000  # 米转度
+            # 障碍物半径 + 安全边距
+            total_radius_m = best_obstacle.radius + self.safety_margin
+            obs_radius_deg = total_radius_m / 111000  # 米转度
         else:
-            # 计算多边形的大致半径
-            obs_radius_deg = 0.0005  # 默认约55米
+            # 多边形使用默认半径 + 安全边距
+            total_radius_m = 55 + self.safety_margin  # 默认55米 + 安全边距
+            obs_radius_deg = total_radius_m / 111000
         
         # 从不同方向搜索安全点
         for angle in search_angles:
             rad = math.radians(angle)
-            # 从障碍物边界外开始搜索
+            # 从障碍物边界外开始搜索（使用包含安全边距的半径）
             for dist_factor in [1.2, 1.5, 2.0, 2.5, 3.0]:
                 escape_lat = best_obstacle.center_lat + math.cos(rad) * obs_radius_deg * dist_factor
                 escape_lon = best_obstacle.center_lon + math.sin(rad) * obs_radius_deg * dist_factor
@@ -478,21 +481,23 @@ class GridPathPlanner:
         """
         end = (end_wp.lat, end_wp.lon)
         
-        # 找出包含终点的障碍物
+        # 【关键修复】找出包含终点的障碍物（使用safety_margin，与is_collision一致）
         target_obstacle = None
         for obs in self.obstacles:
-            if obs.is_inside(end[0], end[1], 0):
+            if obs.is_inside(end[0], end[1], self.safety_margin):
                 target_obstacle = obs
                 break
         
         if target_obstacle is None:
             return None, "无法确定包含终点的障碍物"
         
-        # 获取障碍物的安全边界半径
+        # 【关键修复】获取障碍物的安全边界半径（包含safety_margin）
         if target_obstacle.type == "circle":
-            obs_radius_deg = target_obstacle.radius / 111000  # 米转度
+            total_radius_m = target_obstacle.radius + self.safety_margin
+            obs_radius_deg = total_radius_m / 111000  # 米转度
         else:
-            obs_radius_deg = 0.0005  # 默认约55米
+            total_radius_m = 55 + self.safety_margin  # 默认55米 + 安全边距
+            obs_radius_deg = total_radius_m / 111000
         
         # 搜索最近的安全点作为悬停点
         search_angles = list(range(0, 360, 10))
@@ -501,6 +506,7 @@ class GridPathPlanner:
         
         for angle in search_angles:
             rad = math.radians(angle)
+            # 从障碍物边界外开始搜索（使用包含安全边距的半径）
             for dist_factor in [1.2, 1.5, 2.0, 2.5, 3.0]:
                 hover_lat = target_obstacle.center_lat + math.cos(rad) * obs_radius_deg * dist_factor
                 hover_lon = target_obstacle.center_lon + math.sin(rad) * obs_radius_deg * dist_factor
@@ -816,29 +822,52 @@ class GridPathPlanner:
         paths = {}
         error_msgs = []
         
-        # 【关键】先检查起点和终点是否在障碍物内
+        # 【关键】检查起点和终点是否在障碍物内
         start = (start_wp.lat, start_wp.lon)
         end = (end_wp.lat, end_wp.lon)
         flight_alt = start_wp.alt
         
-        if self.is_collision(start[0], start[1], flight_alt):
+        start_in_obs = self.is_collision(start[0], start[1], flight_alt)
+        end_in_obs = self.is_collision(end[0], end[1], flight_alt)
+        
+        escape_wp = None
+        hover_wp = None
+        
+        if start_in_obs:
             # 尝试规划起飞避让
             escape_wp, escape_msg = self.plan_takeoff_escape(start_wp, flight_alt)
             if escape_wp is None:
                 return {}, "起点在障碍物安全边界内，且{}".format(escape_msg)
         
-        if self.is_collision(end[0], end[1], flight_alt):
+        if end_in_obs:
             # 尝试规划终点悬停
             hover_wp, hover_msg = self.plan_landing_approach(end_wp, flight_alt)
             if hover_wp is None:
                 return {}, "终点在障碍物安全边界内，且{}".format(hover_msg)
         
+        # 确定实际使用的起点和终点
+        actual_start = escape_wp if escape_wp else start_wp
+        actual_end = hover_wp if hover_wp else end_wp
+        
         # 1. 左绕行
-        left_path, left_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=-1)
+        left_path, left_msg = self._plan_single_path(actual_start, actual_end, flight_alt, bias=-1)
         if left_path:
+            # 如果使用了避让点/悬停点，添加前缀
+            if escape_wp and hover_wp:
+                name = '⬅️ 左侧(避让+悬停)'
+                left_path = [start_wp, escape_wp] + left_path[1:-1] + [hover_wp, end_wp]
+            elif escape_wp:
+                name = '⬅️ 左侧(需避让)'
+                left_path = [start_wp, escape_wp] + left_path[1:]
+            elif hover_wp:
+                name = '⬅️ 左侧(需悬停)'
+                left_path = left_path[:-1] + [hover_wp, end_wp]
+            else:
+                name = '⬅️ 左侧绕行'
+            
             paths['left'] = {
                 'path': left_path,
-                'name': '⬅️ 左侧绕行',
+                'name': name,
                 'distance': sum(self.haversine_distance(
                     left_path[i].lat, left_path[i].lon,
                     left_path[i+1].lat, left_path[i+1].lon) for i in range(len(left_path)-1)),
@@ -849,11 +878,23 @@ class GridPathPlanner:
             error_msgs.append("左绕行: {}".format(left_msg))
         
         # 2. 右绕行
-        right_path, right_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=1)
+        right_path, right_msg = self._plan_single_path(actual_start, actual_end, flight_alt, bias=1)
         if right_path:
+            if escape_wp and hover_wp:
+                name = '➡️ 右侧(避让+悬停)'
+                right_path = [start_wp, escape_wp] + right_path[1:-1] + [hover_wp, end_wp]
+            elif escape_wp:
+                name = '➡️ 右侧(需避让)'
+                right_path = [start_wp, escape_wp] + right_path[1:]
+            elif hover_wp:
+                name = '➡️ 右侧(需悬停)'
+                right_path = right_path[:-1] + [hover_wp, end_wp]
+            else:
+                name = '➡️ 右侧绕行'
+            
             paths['right'] = {
                 'path': right_path,
-                'name': '➡️ 右侧绕行',
+                'name': name,
                 'distance': sum(self.haversine_distance(
                     right_path[i].lat, right_path[i].lon,
                     right_path[i+1].lat, right_path[i+1].lon) for i in range(len(right_path)-1)),
@@ -864,8 +905,8 @@ class GridPathPlanner:
             error_msgs.append("右绕行: {}".format(right_msg))
         
         # 3. 最优绕行
-        best_path, best_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=0)
-        if best_path and len(best_path) == 2:  # 直线路径
+        best_path, best_msg = self._plan_single_path(actual_start, actual_end, flight_alt, bias=0)
+        if best_path and len(best_path) == 2 and not escape_wp and not hover_wp:  # 直线路径
             paths['direct'] = {
                 'path': best_path,
                 'name': '⬆️ 直线飞行',
@@ -876,9 +917,21 @@ class GridPathPlanner:
                 'msg': best_msg
             }
         elif best_path:
+            if escape_wp and hover_wp:
+                name = '✨ 最优(避让+悬停)'
+                best_path = [start_wp, escape_wp] + best_path[1:-1] + [hover_wp, end_wp]
+            elif escape_wp:
+                name = '✨ 最优(需避让)'
+                best_path = [start_wp, escape_wp] + best_path[1:]
+            elif hover_wp:
+                name = '✨ 最优(需悬停)'
+                best_path = best_path[:-1] + [hover_wp, end_wp]
+            else:
+                name = '✨ 最优绕行'
+            
             paths['best'] = {
                 'path': best_path,
-                'name': '✨ 最优绕行',
+                'name': name,
                 'distance': sum(self.haversine_distance(
                     best_path[i].lat, best_path[i].lon,
                     best_path[i+1].lat, best_path[i+1].lon) for i in range(len(best_path)-1)),
@@ -907,6 +960,107 @@ class GridPathPlanner:
             return {}, "; ".join(error_msgs)
         
         return paths
+    
+    def _plan_single_path(self, start_wp, end_wp, flight_alt, bias=0):
+        """
+        规划单条路径（不处理起飞避让/终点悬停，由上层处理）
+        返回: (waypoints_list, message) 或 (None, error_message)
+        """
+        start = (start_wp.lat, start_wp.lon)
+        end = (end_wp.lat, end_wp.lon)
+        
+        # 【关键】检查直线路径是否安全
+        if not self.line_hits_obstacle(start, end, flight_alt):
+            return [start_wp, end_wp], "直线路径安全"
+        
+        # 获取包含障碍物的边界框
+        lat_min, lat_max, lon_min, lon_max = self.get_bounding_box_with_obstacles(start, end)
+        
+        # 根据偏向调整边界框
+        lat_range = lat_max - lat_min
+        lon_range = lon_max - lon_min
+        if bias < 0:  # 左偏
+            lon_min -= lon_range * 0.3
+        elif bias > 0:  # 右偏
+            lon_max += lon_range * 0.3
+        
+        base_lat = lat_min
+        base_lon = lon_min
+        
+        start_grid = self.latlon_to_grid(start[0], start[1], base_lat, base_lon)
+        end_grid = self.latlon_to_grid(end[0], end[1], base_lat, base_lon)
+        
+        # 24方向搜索
+        directions = [
+            (0,1), (1,0), (0,-1), (-1,0),
+            (1,1), (1,-1), (-1,1), (-1,-1),
+            (0,2), (2,0), (0,-2), (-2,0),
+            (2,2), (2,-2), (-2,2), (-2,-2),
+            (0,3), (3,0), (0,-3), (-3,0),
+            (1,2), (2,1), (-1,2), (-2,1), (1,-2), (2,-1), (-1,-2), (-2,-1),
+        ]
+        
+        open_set = [(0, 0, start_grid[0], start_grid[1], [start_grid])]
+        visited = {}
+        iteration = 0
+        best_path = None
+        best_dist = float('inf')
+        
+        while open_set and iteration < self.max_iterations:
+            iteration += 1
+            f_cost, g_cost, x, y, path = heapq.heappop(open_set)
+            
+            # 检查是否到达终点
+            if abs(x - end_grid[0]) <= 2 and abs(y - end_grid[1]) <= 2:
+                waypoints = [start_wp]
+                for grid in path[1:]:
+                    lat, lon = self.grid_to_latlon(grid[0], grid[1], base_lat, base_lon)
+                    waypoints.append(Waypoint(lat, lon, flight_alt, 16, len(waypoints)))
+                waypoints.append(end_wp)
+                waypoints[-1].seq = len(waypoints) - 1
+                waypoints = self.smooth_path(waypoints, flight_alt)
+                
+                if self.validate_path(waypoints, flight_alt):
+                    current_dist = sum(self.haversine_distance(
+                        waypoints[i].lat, waypoints[i].lon, 
+                        waypoints[i+1].lat, waypoints[i+1].lon) for i in range(len(waypoints)-1))
+                    if current_dist < best_dist:
+                        best_dist = current_dist
+                        best_path = waypoints
+                if iteration > 10000:
+                    break
+                continue
+            
+            key = (x, y)
+            if key in visited and visited[key] <= g_cost:
+                continue
+            visited[key] = g_cost
+            
+            for dx, dy in directions:
+                nx, ny = x + dx, y + dy
+                lat, lon = self.grid_to_latlon(nx, ny, base_lat, base_lon)
+                if not (lat_min <= lat <= lat_max and lon_min <= lon <= lon_max):
+                    continue
+                if self.is_collision(lat, lon, flight_alt):
+                    continue
+                curr_lat, curr_lon = self.grid_to_latlon(x, y, base_lat, base_lon)
+                if self.line_hits_obstacle((curr_lat, curr_lon), (lat, lon), flight_alt):
+                    continue
+                move_cost = math.sqrt(dx**2 + dy**2) * self.grid_size
+                new_g_cost = g_cost + move_cost
+                if (nx, ny) in visited and visited[(nx, ny)] <= new_g_cost:
+                    continue
+                h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
+                if bias < 0:
+                    h += (nx - start_grid[0]) * self.grid_size * 0.3
+                elif bias > 0:
+                    h += (start_grid[0] - nx) * self.grid_size * 0.3
+                heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
+        
+        if best_path is not None:
+            if self.validate_path(best_path, flight_alt):
+                return best_path, "规划成功"
+        return None, "无法找到可行路径"
     
     def smooth_path(self, waypoints, flight_alt):
         """路径平滑 - 移除不必要的中间点"""
