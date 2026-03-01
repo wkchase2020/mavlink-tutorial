@@ -1505,6 +1505,24 @@ if page == "🗺️ 航线规划":
         
         st.markdown(f"**🧭 路径规划** ({' | '.join(plan_status)})")
         
+        # 【新增】检查起点是否在障碍物内
+        if st.session_state.point_a:
+            start_collision = st.session_state.planner.is_collision(
+                st.session_state.point_a[0], st.session_state.point_a[1], 
+                st.session_state.flight_altitude
+            )
+            if start_collision:
+                st.warning("⚠️ **起点在障碍物安全半径内！** 系统将自动规划「起飞避让」路径：先飞行至安全区域，再前往目标点。")
+        
+        # 检查终点是否在障碍物内
+        if st.session_state.point_b:
+            end_collision = st.session_state.planner.is_collision(
+                st.session_state.point_b[0], st.session_state.point_b[1],
+                st.session_state.flight_altitude
+            )
+            if end_collision:
+                st.error("❌ **终点在障碍物安全半径内！** 请调整终点位置，确保其在安全区域外。")
+        
         # 检查是否可以爬升飞越
         force_avoidance = st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude)
         can_climb = not force_avoidance
@@ -1677,6 +1695,9 @@ elif page == "✈️ 飞行监控":
         with ctrl_cols[4]:
             status_text = "🟢 飞行中" if st.session_state.mission_executing else ("🟡 已暂停" if st.session_state.drone_position else "⚪ 就绪")
             st.markdown(f"**{status_text}**")
+        
+        # 【修复】确保curr_idx始终有值
+        curr_idx = st.session_state.current_waypoint_index
         
         # ==========================================
         # 【核心修复】基于时间的飞行推进逻辑
@@ -1890,39 +1911,77 @@ elif page == "✈️ 飞行监控":
         
         with right_col:
             # ==========================================
-            # 通信链路状态
+            # 通信链路拓扑与数据流
             # ==========================================
-            st.subheader("📡 通信链路状态")
+            st.subheader("📡 通信链路拓扑与数据流")
             
             # 节点在线状态
             node_cols = st.columns(3)
             with node_cols[0]:
-                gcs_online = st.checkbox("🖥️ GCS", value=True, key="gcs_node")
+                gcs_online = st.checkbox("🖥️ GCS 在线", value=True, key="gcs_node_v9")
             with node_cols[1]:
-                obc_online = st.checkbox("🧠 OBC", value=True, key="obc_node")
+                obc_online = st.checkbox("🧠 OBC 在线", value=True, key="obc_node_v9")
             with node_cols[2]:
-                fcu_online = st.checkbox("⚙️ FCU", value=True, key="fcu_node")
+                fcu_online = st.checkbox("⚙️ FCU 在线", value=True, key="fcu_node_v9")
             
-            # 链路状态可视化
+            st.markdown("---")
+            
+            # 链路状态计算
             gcs_obc_ok = gcs_online and obc_online
             obc_fcu_ok = obc_online and fcu_online
+            gcs_fcu_ok = gcs_online and fcu_online
             
-            link_html = f"""
-            <div style="background:#f8f9fa;padding:12px;border-radius:8px;margin:8px 0;font-size:12px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                    <span><b>🖥️ GCS</b> ←→ <b>🧠 OBC</b></span>
-                    <span style="color:{'#28a745' if gcs_obc_ok else '#dc3545'};">{'🟢 已连接' if gcs_obc_ok else '🔴 断开'}</span>
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <span><b>🧠 OBC</b> ←→ <b>⚙️ FCU</b></span>
-                    <span style="color:{'#28a745' if obc_fcu_ok else '#dc3545'};">{'🟢 已连接' if obc_fcu_ok else '🔴 断开'}</span>
-                </div>
-                <div style="margin-top:8px;padding-top:8px;border-top:1px solid #ddd;font-size:11px;color:#666;">
-                    延迟: ~25ms | 丢包率: 0.1% | 带宽: 57600bps
+            gcs_obc_status = "🟢 已连接" if gcs_obc_ok else "🔴 断开"
+            obc_fcu_status = "🟢 已连接" if obc_fcu_ok else "🔴 断开"
+            gcs_fcu_status = "🟢 直连" if gcs_fcu_ok else "⚪ 未直连"
+            
+            # 拓扑图可视化
+            topo_html = """
+            <div style="background:#f8f9fa;padding:15px;border-radius:10px;margin:10px 0;">
+                <table style="width:100%;text-align:center;">
+                    <tr>
+                        <td style="width:20%;">
+                            <div style="background:#e3f2fd;padding:15px;border-radius:8px;border:2px solid #2196f3;">
+                                <div style="font-size:24px;">🖥️</div>
+                                <div style="font-weight:bold;">GCS</div>
+                                <div style="font-size:11px;color:#666;">地面站<br>192.168.1.100</div>
+                            </div>
+                        </td>
+                        <td style="width:15%;vertical-align:middle;">
+                            <div style="font-size:14px;color:#0066cc;">⬆⬇<br>UDP:14550</div>
+                            <div style="font-size:12px;padding:3px 8px;background:#e8f5e9;border-radius:10px;display:inline-block;">""" + gcs_obc_status + """</div>
+                        </td>
+                        <td style="width:20%;">
+                            <div style="background:#fff3e0;padding:15px;border-radius:8px;border:2px solid #ff9800;">
+                                <div style="font-size:24px;">🧠</div>
+                                <div style="font-weight:bold;">OBC</div>
+                                <div style="font-size:11px;color:#666;">机载计算机<br>Raspberry Pi 4</div>
+                            </div>
+                        </td>
+                        <td style="width:15%;vertical-align:middle;">
+                            <div style="font-size:14px;color:#e65100;">⬆⬇<br>MAVLink</div>
+                            <div style="font-size:12px;padding:3px 8px;background:#e8f5e9;border-radius:10px;display:inline-block;">""" + obc_fcu_status + """</div>
+                        </td>
+                        <td style="width:20%;">
+                            <div style="background:#f3e5f5;padding:15px;border-radius:8px;border:2px solid #9c27b0;">
+                                <div style="font-size:24px;">⚙️</div>
+                                <div style="font-weight:bold;">FCU</div>
+                                <div style="font-size:11px;color:#666;">飞控<br>PX4 / ArduPilot</div>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+                
+                <div style="margin-top:15px;padding:10px;background:#fff;border-radius:5px;font-size:12px;">
+                    <b>📊 链路统计：</b>
+                    <span style="margin-left:15px;">GCS↔OBC: """ + ("正常" if gcs_obc_ok else "异常") + """</span>
+                    <span style="margin-left:15px;">OBC↔FCU: """ + ("正常" if obc_fcu_ok else "异常") + """</span>
+                    <span style="margin-left:15px;">延迟: ~25ms</span>
+                    <span style="margin-left:15px;">丢包率: 0.1%</span>
                 </div>
             </div>
             """
-            st.html(link_html)
+            st.html(topo_html)
             
             # ==========================================
             # 通信日志 Tab
@@ -2013,4 +2072,67 @@ elif page == "✈️ 飞行监控":
                 
                 if is_completed:
                     status = "✅ 已完成"
-               
+                elif is_current:
+                    status = "🚁 当前"
+                else:
+                    status = "⏳ 待执行"
+                
+                # 计算ETA
+                eta = "--:--"
+                if i > curr_idx and flight_speed > 0:
+                    dist_accum = 0
+                    for j in range(curr_idx, i):
+                        if j < len(st.session_state.waypoints) - 1:
+                            dist_accum += st.session_state.planner.haversine_distance(
+                                st.session_state.waypoints[j].lat, st.session_state.waypoints[j].lon,
+                                st.session_state.waypoints[j+1].lat, st.session_state.waypoints[j+1].lon
+                            )
+                    eta_seconds = dist_accum / flight_speed
+                    eta = f"{int(eta_seconds//60):02d}:{int(eta_seconds%60):02d}"
+                
+                wp_data.append({
+                    "序号": f"WP{i}",
+                    "坐标": f"{wp.lat:.5f}, {wp.lon:.5f}",
+                    "高度": f"{wp.alt}m",
+                    "距下点": f"{dist_to_next:.0f}m" if dist_to_next > 0 else "--",
+                    "状态": status,
+                    "预计": eta
+                })
+            
+            # 显示表格
+            wp_df_cols = st.columns(len(wp_data))
+            for i, wp_info in enumerate(wp_data):
+                with wp_df_cols[i]:
+                    card_style = "background:#e8f5e9;border:2px solid #4caf50;" if "已完成" in wp_info['状态'] else \
+                                "background:#fff3e0;border:2px solid #ff9800;" if "当前" in wp_info['状态'] else \
+                                "background:#f5f5f5;border:1px solid #ddd;"
+                    
+                    # 状态卡片样式
+                    is_completed = "已完成" in wp_info['状态']
+                    is_current = "当前" in wp_info['状态']
+                    card_style = "background:#e8f5e9;border:2px solid #4caf50;" if is_completed else \
+                                "background:#fff3e0;border:2px solid #ff9800;" if is_current else \
+                                "background:#f5f5f5;border:1px solid #ddd;"
+                    
+                    st.markdown(f"""
+                    <div style="{card_style}padding:8px;border-radius:6px;text-align:center;font-size:11px;">
+                        <div style="font-weight:bold;font-size:13px;margin-bottom:4px;">{wp_info['序号']}</div>
+                        <div style="color:#666;margin-bottom:2px;">{wp_info['坐标']}</div>
+                        <div style="color:#2196f3;font-weight:bold;">{wp_info['高度']}</div>
+                        <div style="margin-top:4px;padding-top:4px;border-top:1px dashed #ccc;">
+                            <span style="font-size:10px;">{wp_info['状态']}</span>
+                        </div>
+                        <div style="font-size:9px;color:#666;margin-top:2px;">{wp_info['预计']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        # ==========================================
+        # 【已移除】自动推进逻辑已移到页面顶部
+        # 页面通过自然刷新（按钮点击等）更新状态
+        # ==========================================
+
+
+
+
+st.markdown("---")
+st.caption("MAVLink GCS v1.9 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
