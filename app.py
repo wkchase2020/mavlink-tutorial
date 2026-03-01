@@ -1859,6 +1859,12 @@ elif page == "✈️ 飞行监控":
                     st.session_state.flight_start_time = time.time()
                     st.session_state.logged_waypoints = set([0])  # 起点算已完成
                     
+                    # 【关键】清除之前的路径时间缓存，重新计算
+                    if 'waypoint_cumulative_times' in st.session_state:
+                        del st.session_state['waypoint_cumulative_times']
+                    if 'total_flight_distance' in st.session_state:
+                        del st.session_state['total_flight_distance']
+                    
                     # 简化的位置计算 - 直接记录当前目标航点
                     st.session_state.drone_pos_index = 0
                     st.session_state.drone_position = [
@@ -1893,6 +1899,12 @@ elif page == "✈️ 飞行监控":
                 st.session_state.drone_position = None
                 st.session_state.flight_start_time = None
                 st.session_state.logged_waypoints = set()
+                
+                # 【关键】清除路径时间缓存
+                if 'waypoint_cumulative_times' in st.session_state:
+                    del st.session_state['waypoint_cumulative_times']
+                if 'total_flight_distance' in st.session_state:
+                    del st.session_state['total_flight_distance']
         
         with ctrl_cols[4]:
             status_text = "🟢 飞行中" if st.session_state.mission_executing else ("🟡 已暂停" if st.session_state.drone_position else "⚪ 就绪")
