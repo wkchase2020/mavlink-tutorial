@@ -399,6 +399,16 @@ class GridPathPlanner:
     
     def line_hits_obstacle(self, p1, p2, flight_alt):
         """【严格】检测线段是否与任何障碍物相交"""
+        # 【关键修复】确保p1, p2是tuple格式 (lat, lon)
+        if hasattr(p1, 'lat'):
+            p1 = (float(p1.lat), float(p1.lon))
+        else:
+            p1 = (float(p1[0]), float(p1[1]))
+        if hasattr(p2, 'lat'):
+            p2 = (float(p2.lat), float(p2.lon))
+        else:
+            p2 = (float(p2[0]), float(p2[1]))
+        
         for obs in self.obstacles:
             if obs.height >= flight_alt:
                 if obs.line_intersects(p1, p2):
