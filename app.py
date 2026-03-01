@@ -443,8 +443,8 @@ class GridPathPlanner:
             return None, "无法确定包含起点的障碍物"
         
         # 获取障碍物的安全边界半径
-        if isinstance(best_obstacle, Obstacle3D):
-            obs_radius_deg = best_obstacle.radius_deg
+        if best_obstacle.type == "circle":
+            obs_radius_deg = best_obstacle.radius / 111000  # 米转度
         else:
             # 计算多边形的大致半径
             obs_radius_deg = 0.0005  # 默认约55米
@@ -489,10 +489,10 @@ class GridPathPlanner:
             return None, "无法确定包含终点的障碍物"
         
         # 获取障碍物的安全边界半径
-        if isinstance(target_obstacle, Obstacle3D):
-            obs_radius_deg = target_obstacle.radius_deg
+        if target_obstacle.type == "circle":
+            obs_radius_deg = target_obstacle.radius / 111000  # 米转度
         else:
-            obs_radius_deg = 0.0005
+            obs_radius_deg = 0.0005  # 默认约55米
         
         # 搜索最近的安全点作为悬停点
         search_angles = list(range(0, 360, 10))
@@ -816,6 +816,24 @@ class GridPathPlanner:
     def plan_multiple_paths(self, start_wp, end_wp, max_altitude):
         """规划多条路径供选择"""
         paths = {}
+        error_msgs = []
+        
+        # 【关键】先检查起点和终点是否在障碍物内
+        start = (start_wp.lat, start_wp.lon)
+        end = (end_wp.lat, end_wp.lon)
+        flight_alt = start_wp.alt
+        
+        if self.is_collision(start[0], start[1], flight_alt):
+            # 尝试规划起飞避让
+            escape_wp, escape_msg = self.plan_takeoff_escape(start_wp, flight_alt)
+            if escape_wp is None:
+                return {}, f"起点在障碍物安全边界内，且{escape_msg}"
+        
+        if self.is_collision(end[0], end[1], flight_alt):
+            # 尝试规划终点悬停
+            hover_wp, hover_msg = self.plan_landing_approach(end_wp, flight_alt)
+            if hover_wp is None:
+                return {}, f"终点在障碍物安全边界内，且{hover_msg}"
         
         # 1. 左绕行
         left_path, left_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=-1)
@@ -826,8 +844,11 @@ class GridPathPlanner:
                 'distance': sum(self.haversine_distance(
                     left_path[i].lat, left_path[i].lon,
                     left_path[i+1].lat, left_path[i+1].lon) for i in range(len(left_path)-1)),
-                'type': 'horizontal'
+                'type': 'horizontal',
+                'msg': left_msg
             }
+        else:
+            error_msgs.append(f"左绕行: {left_msg}")
         
         # 2. 右绕行
         right_path, right_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=1)
@@ -838,8 +859,11 @@ class GridPathPlanner:
                 'distance': sum(self.haversine_distance(
                     right_path[i].lat, right_path[i].lon,
                     right_path[i+1].lat, right_path[i+1].lon) for i in range(len(right_path)-1)),
-                'type': 'horizontal'
+                'type': 'horizontal',
+                'msg': right_msg
             }
+        else:
+            error_msgs.append(f"右绕行: {right_msg}")
         
         # 3. 最优绕行
         best_path, best_msg = self.plan_horizontal_avoidance(start_wp, end_wp, bias=0)
@@ -850,7 +874,8 @@ class GridPathPlanner:
                 'distance': sum(self.haversine_distance(
                     best_path[i].lat, best_path[i].lon,
                     best_path[i+1].lat, best_path[i+1].lon) for i in range(len(best_path)-1)),
-                'type': 'direct'
+                'type': 'direct',
+                'msg': best_msg
             }
         elif best_path:
             paths['best'] = {
@@ -859,8 +884,11 @@ class GridPathPlanner:
                 'distance': sum(self.haversine_distance(
                     best_path[i].lat, best_path[i].lon,
                     best_path[i+1].lat, best_path[i+1].lon) for i in range(len(best_path)-1)),
-                'type': 'horizontal'
+                'type': 'horizontal',
+                'msg': best_msg
             }
+        else:
+            error_msgs.append(f"最优: {best_msg}")
         
         # 4. 爬升飞越（如果可行）
         climb_path = self.plan_climb_over(start_wp, end_wp, max_altitude)
@@ -875,6 +903,10 @@ class GridPathPlanner:
                 'max_altitude': max_fly_alt,
                 'type': 'climb'
             }
+        
+        # 如果没有找到任何路径，返回错误信息
+        if not paths and error_msgs:
+            return {}, "; ".join(error_msgs)
         
         return paths
     
@@ -1609,9 +1641,17 @@ if page == "🗺️ 航线规划":
                 st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: NAV_TARGET ({st.session_state.point_a[0]:.6f}, {st.session_state.point_a[1]:.6f}) → ({st.session_state.point_b[0]:.6f}, {st.session_state.point_b[1]:.6f})")
                 
                 with st.spinner("🧭 正在规划多条路径..."):
-                    all_paths = st.session_state.planner.plan_multiple_paths(
+                    result = st.session_state.planner.plan_multiple_paths(
                         start_wp, end_wp, st.session_state.max_altitude
                     )
+                    
+                    # 处理新的返回值格式 (paths_dict, error_message)
+                    if isinstance(result, tuple) and len(result) == 2:
+                        all_paths, error_msg = result
+                    else:
+                        all_paths = result
+                        error_msg = ""
+                    
                     st.session_state['available_paths'] = all_paths
                     
                     if all_paths:
@@ -1622,7 +1662,10 @@ if page == "🗺️ 航线规划":
                                 v['distance'], len(v['path']), v['type']
                             )
                     else:
-                        st.error("❌ 无法找到可行路径")
+                        if error_msg:
+                            st.error(f"❌ {error_msg}")
+                        else:
+                            st.error("❌ 无法找到可行路径")
                 st.rerun()
         
         # 显示可选路径列表
@@ -1976,35 +2019,4 @@ elif page == "✈️ 飞行监控":
                 log_html += "</div>"
                 st.html(log_html)
                 
-                if st.button("🗑️ 清除日志", key="clear_comm_log"):
-                    st.session_state.comm_logger.clear()
-                    st.rerun()
-            
-            with log_tab2:
-                # MAVLink发送日志
-                st.markdown("<small style='color:#0066cc'>📤 GCS → FCU (发送)</small>", unsafe_allow_html=True)
-                send_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#e7f3ff;padding:5px;border-radius:3px;'>"
-                if st.session_state.send_log:
-                    for log in list(st.session_state.send_log)[-8:]:
-                        send_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
-                else:
-                    send_html += "<div style='color:#999'>暂无发送记录</div>"
-                send_html += "</div>"
-                st.html(send_html)
-                
-                # MAVLink接收日志
-                st.markdown("<small style='color:#cc6600'>📥 FCU → GCS (接收)</small>", unsafe_allow_html=True)
-                recv_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:5px;border-radius:3px;'>"
-                if st.session_state.recv_log:
-                    for log in list(st.session_state.recv_log)[-8:]:
-                        recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
-                else:
-                    recv_html += "<div style='color:#999'>暂无接收记录</div>"
-                recv_html += "</div>"
-                st.html(recv_html)
-
-
-
-
-st.markdown("---")
-st.caption("MAVLink GCS v6.0 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
+                if st.button("🗑️ 清除日志", key="clear_
