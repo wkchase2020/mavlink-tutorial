@@ -435,7 +435,7 @@ class GridPathPlanner:
         
         # 找出包含起点的障碍物
         for obs in self.obstacles:
-            if obs.is_point_inside(start[0], start[1], flight_alt):
+            if obs.is_inside(start[0], start[1], 0):
                 best_obstacle = obs
                 break
         
@@ -481,7 +481,7 @@ class GridPathPlanner:
         # 找出包含终点的障碍物
         target_obstacle = None
         for obs in self.obstacles:
-            if obs.is_point_inside(end[0], end[1], flight_alt):
+            if obs.is_inside(end[0], end[1], 0):
                 target_obstacle = obs
                 break
         
