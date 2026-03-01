@@ -412,23 +412,29 @@ class GridPathPlanner:
     
     def line_hits_obstacle(self, p1, p2, flight_alt):
         """【严格】检测线段是否与任何障碍物相交"""
-        # 【关键修复】确保p1, p2是tuple格式 (lat, lon)
+        # 【关键修复】确保p1, p2是tuple格式 (lat, lon) - 数字类型
         try:
             if p1 is None or p2 is None:
                 return False
+            
+            # 提取坐标值
             if hasattr(p1, 'lat') and hasattr(p1, 'lon'):
-                p1 = (float(p1.lat), float(p1.lon))
+                lat1, lon1 = float(p1.lat), float(p1.lon)
             elif isinstance(p1, (list, tuple)) and len(p1) >= 2:
-                p1 = (float(p1[0]), float(p1[1]))
+                lat1, lon1 = float(p1[0]), float(p1[1])
             else:
                 return False
+                
             if hasattr(p2, 'lat') and hasattr(p2, 'lon'):
-                p2 = (float(p2.lat), float(p2.lon))
+                lat2, lon2 = float(p2.lat), float(p2.lon)
             elif isinstance(p2, (list, tuple)) and len(p2) >= 2:
-                p2 = (float(p2[0]), float(p2[1]))
+                lat2, lon2 = float(p2[0]), float(p2[1])
             else:
                 return False
-        except (TypeError, ValueError, IndexError):
+            
+            p1 = (lat1, lon1)
+            p2 = (lat2, lon2)
+        except (TypeError, ValueError, IndexError, AttributeError):
             return False
         
         for obs in self.obstacles:
@@ -1032,8 +1038,12 @@ class GridPathPlanner:
         规划单条路径（不处理起飞避让/终点悬停，由上层处理）
         返回: (waypoints_list, message) 或 (None, error_message)
         """
-        start = (start_wp.lat, start_wp.lon)
-        end = (end_wp.lat, end_wp.lon)
+        # 确保提取的是数字坐标
+        try:
+            start = (float(start_wp.lat), float(start_wp.lon))
+            end = (float(end_wp.lat), float(end_wp.lon))
+        except (TypeError, ValueError, AttributeError):
+            return None, "起点或终点坐标无效"
         
         # 【关键】检查直线路径是否安全
         if not self.line_hits_obstacle(start, end, flight_alt):
