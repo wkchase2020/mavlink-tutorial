@@ -1940,6 +1940,11 @@ elif page == "✈️ 飞行监控":
                     st.session_state.comm_logger.log_flight_complete()
                     timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
                     st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: MISSION_COMPLETE")
+            
+            # 【新增】飞行中持续刷新页面，使整个监控过程持续30多秒
+            if st.session_state.mission_executing:
+                time.sleep(0.5)  # 每0.5秒刷新一次
+                st.rerun()
         
         # ==========================================
         # 实时状态显示
@@ -2036,11 +2041,10 @@ elif page == "✈️ 飞行监控":
                         color=color, fill=True, fillOpacity=0.3
                     ).add_to(m)
             
-            # 绘制计划航线（灰色虚线）- 【修复】任务完成后或飞行中完全隐藏
+            # 绘制计划航线（灰色虚线）- 【修复】任务开始后完全不显示
             if st.session_state.waypoints:
-                # 【修复】更严格的显示条件：只在未开始且未设置飞行时间时显示
-                # 任务执行中或完成后都不显示计划航线
-                show_plan = not st.session_state.flight_start_time and not st.session_state.mission_executing
+                # 【修复】使用简单明确的条件：只要开始过飞行就不显示计划航线
+                show_plan = not st.session_state.flight_start_time
                 if show_plan:
                     path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
                     folium.PolyLine(
