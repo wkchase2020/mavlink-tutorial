@@ -1684,7 +1684,7 @@ if page == "🗺️ 航线规划":
             st.markdown("---")
         
         # 方式1: 在地图上圈选
-        st.info("💡 **方式1**: 在左侧地图上用 🔲矩形/⭕圆形/📐多边形 工具圈选，选中图形后右侧会显示确认按钮")
+        st.info("[TIP] **方式1**: 在左侧地图上用 [RECT]矩形/[O]圆形/[P]多边形 工具圈选，选中图形后右侧会显示确认按钮")
         
         # 方式2: 手动输入坐标添加
         with st.expander("➕ 方式2: 手动输入坐标添加障碍物", expanded=True):
@@ -1783,19 +1783,19 @@ if page == "🗺️ 航线规划":
                             st.session_state.planner.add_polygon_obstacle(
                                 points_wgs, manual_obs_height, f"多边形障碍({manual_obs_height}m)"
                             )
-                            st.success(f"✅ 已添加多边形障碍物 ({len(points_wgs)}个顶点)，高度{manual_obs_height}m")
+                            st.success(f"[OK] 已添加多边形障碍物 ({len(points_wgs)}个顶点)，高度{manual_obs_height}m")
                             st.rerun()
                         else:
-                            st.error("❌ 多边形需要至少3个顶点")
+                            st.error("[ERR] 多边形需要至少3个顶点")
                     except Exception as e:
-                        st.error(f"❌ 输入格式错误: {e}")
+                        st.error(f"[ERR] 输入格式错误: {e}")
         
         # 障碍物列表
         if st.session_state.planner.obstacles:
             with st.expander(f"📋 障碍物列表({len(st.session_state.planner.obstacles)}个)", expanded=True):
                 for i, obs in enumerate(st.session_state.planner.obstacles):
-                    icon = "⭕" if obs.type == "circle" else "⬜" if obs.type == "rectangle" else "📐"
-                    is_blocking = "🔴" if obs.height >= st.session_state.flight_altitude else "🟢"
+                    icon = "[O]" if obs.type == "circle" else "[R]" if obs.type == "rectangle" else "[P]"
+                    is_blocking = "[!]" if obs.height >= st.session_state.flight_altitude else "[OK]"
                     
                     col_obs, col_del = st.columns([4, 1])
                     with col_obs:
@@ -1827,7 +1827,7 @@ if page == "🗺️ 航线规划":
                             'rotation': o.rotation, 'width': o.width, 'height_m': o.height_m, 
                             'radius': getattr(o, 'radius', 30)
                         } for o in st.session_state.planner.obstacles]
-                        st.success(f"✅ 已记忆 {len(st.session_state.saved_obstacles)} 个障碍物")
+                        st.success(f"[OK] 已记忆 {len(st.session_state.saved_obstacles)} 个障碍物")
                 with col_load:
                     if st.session_state.get('saved_obstacles') and st.button("🔄 恢复障碍物", key="load_obstacles"):
                         st.session_state.planner.clear_obstacles()
@@ -1841,7 +1841,7 @@ if page == "🗺️ 航线规划":
                                     o['rotation'], o['height'], o['name'])
                             else:
                                 st.session_state.planner.add_polygon_obstacle(o['points'], o['height'], o['name'])
-                        st.success(f"✅ 已恢复 {len(st.session_state.saved_obstacles)} 个障碍物")
+                        st.success(f"[OK] 已恢复 {len(st.session_state.saved_obstacles)} 个障碍物")
                         st.rerun()
         
         st.markdown("---")
@@ -1849,8 +1849,8 @@ if page == "🗺️ 航线规划":
         # 路径规划 (can_plan 已在上方定义)
         # 显示当前规划状态
         plan_status = []
-        plan_status.append("✅ A点已设" if has_a else "❌ A点未设")
-        plan_status.append("✅ B点已设" if has_b else "❌ B点未设")
+        plan_status.append("[OK] A点已设" if has_a else "[X] A点未设")
+        plan_status.append("[OK] B点已设" if has_b else "[X] B点未设")
         plan_status.append(f"障碍物: {len(st.session_state.planner.obstacles)}个")
         
         st.markdown(f"**🧭 路径规划** ({' | '.join(plan_status)})")
@@ -1895,7 +1895,7 @@ if page == "🗺️ 航线规划":
                     st.session_state['available_paths'] = all_paths
                     
                     if all_paths:
-                        st.success(f"✅ 规划完成！共 {len(all_paths)} 条可选路径")
+                        st.success(f"[OK] 规划完成！共 {len(all_paths)} 条可选路径")
                         # 记录每条路径的规划完成日志
                         for k, v in all_paths.items():
                             st.session_state.comm_logger.log_path_planning_complete(
@@ -1903,9 +1903,9 @@ if page == "🗺️ 航线规划":
                             )
                     else:
                         if error_msg:
-                            st.error(f"❌ {error_msg}")
+                            st.error(f"[X] {error_msg}")
                         else:
-                            st.error("❌ 无法找到可行路径")
+                            st.error("[X] 无法找到可行路径")
                 st.rerun()
         
         # 显示可选路径列表
@@ -1932,13 +1932,13 @@ if page == "🗺️ 航线规划":
                         st.session_state.waypoints = path_info['path']
                         st.session_state.selected_path_type = path_info['type']
                         st.session_state.selected_path_name = path_info['name']
-                        st.success(f"✅ 已选择: {path_info['name']}")
+                        st.success(f"[OK] 已选择: {path_info['name']}")
                         st.rerun()
         
         # 显示当前选中的路径
         if st.session_state.waypoints:
             st.markdown("---")
-            st.markdown("**✅ 当前选中路径**")
+            st.markdown("**[OK] 当前选中路径**")
             path_name = st.session_state.get('selected_path_name', '未命名路径')
             st.success(f"{path_name}: {len(st.session_state.waypoints)}个航点")
             
@@ -1947,7 +1947,7 @@ if page == "🗺️ 航线规划":
                 for i, wp in enumerate(st.session_state.waypoints):
                     st.write(f"航点{i}: ({wp.lat:.6f}, {wp.lon:.6f}), 高度{wp.alt}m")
             
-            if st.button("📤 上传到飞控", type="primary"):
+            if st.button("[UP] 上传到飞控", type="primary"):
                 st.session_state.mission_sent = True
                 st.session_state.comm_logger.log_mission_upload(len(st.session_state.waypoints))
                 
@@ -1958,8 +1958,8 @@ if page == "🗺️ 航线规划":
                     st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WAYPOINT #{i} lat={wp.lat:.6f} lon={wp.lon:.6f} alt={wp.alt}")
                 st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_ACK ok")
                 
-                st.success(f"✅ 已上传 {len(st.session_state.waypoints)} 个航点到飞控")
-                st.balloons()
+                st.success(f"[OK] 已上传 {len(st.session_state.waypoints)} 个航点到飞控")
+                # st.balloons()
 
 
 # ==================== 飞行监控页面 ====================
@@ -2162,9 +2162,9 @@ elif page == "✈️ 飞行监控":
                 cols[3].metric("速度", "8.5m/s")
                 
                 if st.session_state.mission_executing:
-                    st.info("🚁 正在执行任务...")
+                    st.info("[FLY] 正在执行任务...")
                 elif st.session_state.drone_position:
-                    st.warning("⏸️ 任务已暂停")
+                    st.warning("[PAUSE] 任务已暂停")
             
             # 地图显示 - 完整版本
             if st.session_state.all_flight_positions and st.session_state.drone_pos_index < len(st.session_state.all_flight_positions):
@@ -2183,7 +2183,7 @@ elif page == "✈️ 飞行监控":
             folium.TileLayer(
                 tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                 attr='Esri',
-                name='🛰️ 卫星影像',
+                name='[SAT] 卫星影像',
                 overlay=False,
                 control=True
             ).add_to(m)
@@ -2197,11 +2197,11 @@ elif page == "✈️ 飞行监控":
                     if i == 0:
                         folium.Marker([wp.lat, wp.lon], 
                             icon=folium.Icon(color='green', icon='play', prefix='glyphicon'),
-                            popup=f"🚁 起点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
+                            popup=f"[START] 起点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
                     elif i == len(st.session_state.waypoints) - 1:
                         folium.Marker([wp.lat, wp.lon], 
                             icon=folium.Icon(color='red', icon='stop', prefix='glyphicon'),
-                            popup=f"🎯 终点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
+                            popup=f"[END] 终点<br>航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
                     else:
                         color = 'blue' if i > curr else 'lightgray'
                         folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True, fillOpacity=0.8,
@@ -2218,7 +2218,7 @@ elif page == "✈️ 飞行监控":
             
             # 无人机当前位置
             folium.CircleMarker(drone_pos, radius=10, color='orange', fill=True, fillOpacity=0.9,
-                popup=f"🚁 无人机当前位置<br>({drone_pos[0]:.6f}, {drone_pos[1]:.6f})").add_to(m)
+                popup=f"[DRONE] 无人机当前位置<br>({drone_pos[0]:.6f}, {drone_pos[1]:.6f})").add_to(m)
             folium.Marker(drone_pos, 
                 icon=folium.Icon(color='orange', icon='plane', prefix='fa'),
                 popup="无人机").add_to(m)
@@ -2231,7 +2231,7 @@ elif page == "✈️ 飞行监控":
                 color='orange', 
                 fill=True, 
                 fillOpacity=0.2,
-                popup=f"🛡️ 安全半径: {safety_m}m"
+                popup=f"[SAFE] 安全半径: {safety_m}m"
             ).add_to(m)
             
             # 渲染地图
@@ -2239,10 +2239,10 @@ elif page == "✈️ 飞行监控":
         
         # 右侧：通信日志面板
         with log_col:
-            st.subheader("📡 通信链路")
+            st.subheader("[COM] 通信链路")
             
             # Tab切换：业务流程 | MAVLink收发
-            log_tab1, log_tab2 = st.tabs(["🔄 业务流程", "📡 MAVLink收发"])
+            log_tab1, log_tab2 = st.tabs(["[FLOW] 业务流程", "[MAV] MAVLink收发"])
             
             with log_tab1:
                 logs = st.session_state.comm_logger.get_logs()
@@ -2265,7 +2265,7 @@ elif page == "✈️ 飞行监控":
             
             with log_tab2:
                 # MAVLink发送日志
-                st.markdown("<small style='color:#0066cc'>📤 GCS → FCU (发送)</small>", unsafe_allow_html=True)
+                st.markdown("<small style='color:#0066cc'>[GCS->FCU]</small>", unsafe_allow_html=True)
                 send_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#e7f3ff;padding:5px;border-radius:3px;'>"
                 if st.session_state.send_log:
                     for log in list(st.session_state.send_log)[-8:]:
@@ -2276,5 +2276,5 @@ elif page == "✈️ 飞行监控":
                 st.html(send_html)
                 
                 # MAVLink接收日志
-                st.markdown("<small style='color:#cc6600'>📥 FCU → GCS (接收)</small>", unsafe_allow_html=True)
-                recv_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:5px;border-radius:3px;'>
+                st.markdown("<small style='color:#cc6600'>[FCU->GCS]</small>", unsafe_allow_html=True)
+                recv_html = "<div style='max-height:150px;overflow-y:auto;f
