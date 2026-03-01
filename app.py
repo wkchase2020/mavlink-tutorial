@@ -532,7 +532,13 @@ class GridPathPlanner:
                 escape_lat = best_obstacle.center_lat + math.cos(rad) * obs_radius_deg * dist_factor
                 escape_lon = best_obstacle.center_lon + math.sin(rad) * obs_radius_deg * dist_factor
                 
-                if not self.is_collision(escape_lat, escape_lon, flight_alt):
+                # 【关键】只检查水平位置是否在障碍物内（不考虑高度，确保安全距离）
+                is_safe = True
+                for check_obs in self.obstacles:
+                    if check_obs.is_inside(escape_lat, escape_lon, self.safety_margin):
+                        is_safe = False
+                        break
+                if is_safe:
                     dist = math.sqrt((escape_lat - start[0])**2 + (escape_lon - start[1])**2)
                     if dist < best_distance:
                         best_distance = dist
@@ -583,7 +589,13 @@ class GridPathPlanner:
                 hover_lat = target_obstacle.center_lat + math.cos(rad) * obs_radius_deg * dist_factor
                 hover_lon = target_obstacle.center_lon + math.sin(rad) * obs_radius_deg * dist_factor
                 
-                if not self.is_collision(hover_lat, hover_lon, flight_alt):
+                # 【关键】只检查水平位置是否在障碍物内（不考虑高度，确保安全距离）
+                is_safe = True
+                for check_obs in self.obstacles:
+                    if check_obs.is_inside(hover_lat, hover_lon, self.safety_margin):
+                        is_safe = False
+                        break
+                if is_safe:
                     dist = math.sqrt((hover_lat - end[0])**2 + (hover_lon - end[1])**2)
                     if dist < best_distance:
                         best_distance = dist
@@ -2265,18 +2277,4 @@ elif page == "✈️ 飞行监控":
                 
                 # MAVLink接收日志
                 st.markdown("<small style='color:#cc6600'>📥 FCU → GCS (接收)</small>", unsafe_allow_html=True)
-                recv_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:5px;border-radius:3px;'>"
-                if st.session_state.recv_log:
-                    for log in list(st.session_state.recv_log)[-8:]:
-                        recv_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
-                else:
-                    recv_html += "<div style='color:#999'>[无接收记录]</div>"
-                recv_html += "</div>"
-                st.html(recv_html)
-
-
-
-
-st.markdown("---")
-st.caption("MAVLink GCS v6.0 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
-
+                recv_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:5px;border-radius:3px;'>
