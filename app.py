@@ -2265,16 +2265,18 @@ elif page == "✈️ 飞行监控":
             
             with log_tab2:
                 # MAVLink发送日志
-                st.markdown("<small style='color:#0066cc'>[GCS->FCU]</small>", unsafe_allow_html=True)
-                send_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#e7f3ff;padding:5px;border-radius:3px;'>"
+                st.markdown("[GCS->FCU]", unsafe_allow_html=True)
+                send_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#e7f3ff;padding:5px;'>"
                 if st.session_state.send_log:
                     for log in list(st.session_state.send_log)[-8:]:
-                        send_html += f"<div style='padding:2px 0;border-bottom:1px dashed #ccc'>{log}</div>"
+                        send_html += "<div>" + str(log) + "</div>"
                 else:
-                    send_html += "<div style='color:#999'>暂无发送记录</div>"
+                    send_html += "<div>无发送记录</div>"
                 send_html += "</div>"
                 st.html(send_html)
                 
                 # MAVLink接收日志
-                st.markdown("<small style='color:#cc6600'>[FCU->GCS]</small>", unsafe_allow_html=True)
-                recv_html = "<div style='max-height:150px;overflow-y:auto;f
+                st.markdown("[FCU->GCS]", unsafe_allow_html=True)
+                recv_html = "<div style='max-height:150px;overflow-y:auto;font-family:monospace;font-size:10px;background:#fff8e7;padding:5px;'>"
+                if st.session_state.recv_log:
+                    for log in list(s
