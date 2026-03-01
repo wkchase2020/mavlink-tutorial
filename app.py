@@ -1437,7 +1437,7 @@ if page == "🗺️ 航线规划":
 elif page == "✈️ 飞行监控":
     st.title("🚁 飞行实时画面 - 任务执行监控")
     
-    # 自动刷新控制 - 只在任务执行时启用
+    # 自动刷新控制 - 只在任务执行时启用 (500ms间隔)
     if st.session_state.get('mission_executing', False):
         st_autorefresh(interval=500, limit=None, key="flight_autorefresh")
     
@@ -1902,7 +1902,7 @@ elif page == "✈️ 飞行监控":
                     """, unsafe_allow_html=True)
         
         # ==========================================
-        # 自动推进飞行位置 (由st_autorefresh触发刷新)
+        # 自动推进飞行位置
         # ==========================================
         if st.session_state.mission_executing and st.session_state.all_flight_positions:
             idx = st.session_state.drone_pos_index
@@ -1910,8 +1910,8 @@ elif page == "✈️ 飞行监控":
             
             if idx < total_pos - 1:
                 old_wp_idx = st.session_state.current_waypoint_index
-                # 每次前进3步，使动画更平滑但刷新更稳定
-                st.session_state.drone_pos_index = min(idx + 3, total_pos - 1)
+                # 每次前进2步，平衡流畅度和刷新频率
+                st.session_state.drone_pos_index = min(idx + 2, total_pos - 1)
                 
                 # 使用positions中存储的航段索引来精确确定当前航点
                 current_pos_data = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
@@ -1940,7 +1940,7 @@ elif page == "✈️ 飞行监控":
                     alt = current_pos_data[2] if len(current_pos_data) > 2 else 50
                     st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: TELEMETRY lat={pos[0]:.6f} lon={pos[1]:.6f} alt={alt:.1f} spd={flight_speed:.1f}")
                 
-                # 不调用time.sleep和st.rerun()，由st_autorefresh自动刷新
+                # 由 st_autorefresh 自动刷新，不需要手动 rerun
             else:
                 # 到达终点，确保最后一个航点被标记为完成
                 st.session_state.current_waypoint_index = total_wp - 1
