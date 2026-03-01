@@ -1,6 +1,5 @@
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_autorefresh import st_autorefresh
 import time
 import math
 import heapq
@@ -1437,10 +1436,6 @@ if page == "🗺️ 航线规划":
 elif page == "✈️ 飞行监控":
     st.title("🚁 飞行实时画面 - 任务执行监控")
     
-    # 自动刷新控制 - 只在任务执行时启用 (500ms间隔)
-    if st.session_state.get('mission_executing', False):
-        st_autorefresh(interval=500, limit=None, key="flight_autorefresh")
-    
     if not st.session_state.mission_sent:
         st.warning("⚠️ 请先规划并上传航线")
     else:
@@ -1908,56 +1903,66 @@ elif page == "✈️ 飞行监控":
             idx = st.session_state.drone_pos_index
             total_pos = len(st.session_state.all_flight_positions)
             
+            # 初始化 logged_waypoints
+            if not hasattr(st.session_state, 'logged_waypoints'):
+                st.session_state.logged_waypoints = set()
+            
             if idx < total_pos - 1:
                 old_wp_idx = st.session_state.current_waypoint_index
-                # 每次前进2步，平衡流畅度和刷新频率
+                # 每次前进2步
                 st.session_state.drone_pos_index = min(idx + 2, total_pos - 1)
                 
-                # 使用positions中存储的航段索引来精确确定当前航点
+                # 获取当前位置数据
                 current_pos_data = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
-                new_wp_idx = current_pos_data[3] if len(current_pos_data) > 3 else min(st.session_state.drone_pos_index // 30, total_wp - 1)
+                # 航段索引就是当前正在飞往的目标航点索引
+                new_wp_idx = current_pos_data[3] if len(current_pos_data) > 3 else 0
                 
+                # 更新当前航点索引和位置
                 st.session_state.current_waypoint_index = new_wp_idx
                 st.session_state.drone_position = current_pos_data[:2]
                 
-                # 航点到达日志 (只记录一次)
-                if new_wp_idx > old_wp_idx and new_wp_idx < total_wp:
-                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
-                    if not hasattr(st.session_state, 'logged_waypoints'):
-                        st.session_state.logged_waypoints = set()
-                    if new_wp_idx not in st.session_state.logged_waypoints:
-                        st.session_state.logged_waypoints.add(new_wp_idx)
-                        st.session_state.comm_logger.log_waypoint_reached(new_wp_idx, total_wp)
-                        st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WP_REACHED_ACK #{new_wp_idx}")
-                        st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: MISSION_ITEM_REACHED #{new_wp_idx}")
-                        st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC: MISSION_CURRENT #{new_wp_idx+1}")
-                        st.session_state.recv_log.append(f"[{timestamp}] OBC→GCS: WP_REACHED #{new_wp_idx}")
+                # 【关键】航点到达日志 - 包含所有航点（包括最后一个）
+                if new_wp_idx > old_wp_idx:
+                    for wp_idx in range(old_wp_idx + 1, new_wp_idx + 1):
+                        if wp_idx < total_wp and wp_idx not in st.session_state.logged_waypoints:
+                            st.session_state.logged_waypoints.add(wp_idx)
+                            timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
+                            st.session_state.comm_logger.log_waypoint_reached(wp_idx, total_wp)
+                            st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WP_REACHED_ACK #{wp_idx}")
+                            st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: MISSION_ITEM_REACHED #{wp_idx}")
+                            st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC: MISSION_CURRENT #{wp_idx+1}")
+                            st.session_state.recv_log.append(f"[{timestamp}] OBC→GCS: WP_REACHED #{wp_idx}")
                 
-                # 遥测数据 (限制频率)
-                if st.session_state.drone_pos_index % 10 == 0:
+                # 遥测数据
+                if st.session_state.drone_pos_index % 15 == 0:
                     timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
                     pos = st.session_state.drone_position
                     alt = current_pos_data[2] if len(current_pos_data) > 2 else 50
                     st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: TELEMETRY lat={pos[0]:.6f} lon={pos[1]:.6f} alt={alt:.1f} spd={flight_speed:.1f}")
                 
-                # 由 st_autorefresh 自动刷新，不需要手动 rerun
-            else:
-                # 到达终点，确保最后一个航点被标记为完成
-                st.session_state.current_waypoint_index = total_wp - 1
-                st.session_state.drone_position = st.session_state.all_flight_positions[-1][:2]
+                # 控制刷新频率 - 使用 time.sleep + st.rerun
+                time.sleep(0.12)
+                st.rerun()
                 
-                # 记录最后一个航点到达
+            else:
+                # 【关键】到达终点，强制设置到最后一个航点并标记为完成
+                final_idx = total_pos - 1
+                st.session_state.drone_pos_index = final_idx
+                st.session_state.current_waypoint_index = total_wp - 1
+                st.session_state.drone_position = st.session_state.all_flight_positions[final_idx][:2]
+                
+                # 记录所有未记录的航点（包括最后一个）
                 last_wp = total_wp - 1
-                if not hasattr(st.session_state, 'logged_waypoints'):
-                    st.session_state.logged_waypoints = set()
-                if last_wp not in st.session_state.logged_waypoints:
-                    st.session_state.logged_waypoints.add(last_wp)
-                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
-                    st.session_state.comm_logger.log_waypoint_reached(last_wp, total_wp)
-                    st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WP_REACHED_ACK #{last_wp}")
-                    st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: MISSION_ITEM_REACHED #{last_wp}")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC: MISSION_CURRENT #{last_wp}")
-                    st.session_state.recv_log.append(f"[{timestamp}] OBC→GCS: WP_REACHED #{last_wp} (FINAL)")
+                for wp_idx in range(last_wp + 1):
+                    if wp_idx not in st.session_state.logged_waypoints:
+                        st.session_state.logged_waypoints.add(wp_idx)
+                        timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
+                        is_final = "(FINAL)" if wp_idx == last_wp else ""
+                        st.session_state.comm_logger.log_waypoint_reached(wp_idx, total_wp)
+                        st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WP_REACHED_ACK #{wp_idx}")
+                        st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: MISSION_ITEM_REACHED #{wp_idx}")
+                        st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC: MISSION_CURRENT #{wp_idx+1}")
+                        st.session_state.recv_log.append(f"[{timestamp}] OBC→GCS: WP_REACHED #{wp_idx} {is_final}")
                 
                 # 任务完成
                 st.session_state.mission_executing = False
@@ -1966,10 +1971,4 @@ elif page == "✈️ 飞行监控":
                 st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_COMPLETE")
                 st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: CMD_LAND")
                 st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: MISSION_ACK | Mode: LOITER")
-                st.success("🎉 任务执行完成！")
-
-
-
-
-st.markdown("---")
-st.caption("MAVLink GCS v1.9 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
+                st.succes
