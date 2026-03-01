@@ -1823,17 +1823,20 @@ elif page == "✈️ 飞行监控":
                         color=color, fill=True, fillOpacity=0.3
                     ).add_to(m)
             
-            # 绘制计划航线（灰色虚线）
+            # 绘制计划航线（灰色虚线）- 任务完成后隐藏，避免与已飞路径重叠
             if st.session_state.waypoints:
-                path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
-                folium.PolyLine(
-                    path_coords, 
-                    color='gray', 
-                    weight=2, 
-                    opacity=0.5, 
-                    dash_array='5,10',
-                    popup="计划航线"
-                ).add_to(m)
+                # 只在任务执行中或未开始时显示计划航线
+                show_plan = st.session_state.mission_executing or not st.session_state.flight_start_time
+                if show_plan:
+                    path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
+                    folium.PolyLine(
+                        path_coords, 
+                        color='gray', 
+                        weight=2, 
+                        opacity=0.5, 
+                        dash_array='5,10',
+                        popup="计划航线"
+                    ).add_to(m)
                 
                 # 【修复】绘制航点 - 使用logged_waypoints判断完成状态
                 logged = getattr(st.session_state, 'logged_waypoints', set())
@@ -2126,13 +2129,4 @@ elif page == "✈️ 飞行监控":
                     </div>
                     """, unsafe_allow_html=True)
         
-        # ==========================================
-        # 【已移除】自动推进逻辑已移到页面顶部
-        # 页面通过自然刷新（按钮点击等）更新状态
-        # ==========================================
-
-
-
-
-st.markdown("---")
-st.caption("MAVLink GCS v1.9 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
+        # ===========
