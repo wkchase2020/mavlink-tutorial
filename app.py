@@ -468,6 +468,53 @@ class GridPathPlanner:
         
         return None, "无法找到起飞避让出口"
     
+    def plan_landing_approach(self, end_wp, flight_alt):
+        """
+        【新增】规划终点悬停路径 - 当终点在障碍物内时，找最近的安全悬停点
+        尝试向四个正方向寻找最近的入口点（离终点最近的安全点）
+        """
+        end = (end_wp.lat, end_wp.lon)
+        
+        # 检查是否真的在障碍物内
+        if not self.is_collision(end[0], end[1], flight_alt):
+            return None, "终点不在障碍物内，无需悬停接近"
+        
+        # 寻找最近的入口方向（从终点向外）
+        directions = [
+            (0, 1),    # 北
+            (0, -1),   # 南
+            (1, 0),    # 东
+            (-1, 0),   # 西
+            (1, 1),    # 东北
+            (1, -1),   # 东南
+            (-1, 1),   # 西北
+            (-1, -1),  # 西南
+        ]
+        
+        best_entry = None
+        best_dist = float('inf')
+        
+        for dlat, dlon in directions:
+            # 沿该方向逐步搜索，直到找到安全点
+            for step in range(1, 50):  # 最多搜索50步
+                test_lat = end[0] + dlat * step * 0.0001  # 约11米/步
+                test_lon = end[1] + dlon * step * 0.0001 / math.cos(math.radians(end[0]))
+                
+                if not self.is_collision(test_lat, test_lon, flight_alt):
+                    # 找到入口，计算到终点的距离
+                    dist = self.haversine_distance(test_lat, test_lon, end[0], end[1])
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_entry = (test_lat, test_lon)
+                    break
+        
+        if best_entry:
+            # 构建悬停点
+            hover_wp = Waypoint(best_entry[0], best_entry[1], flight_alt, 16, 0)
+            return hover_wp, f"终点悬停: 在距离终点{best_dist:.1f}米处悬停"
+        
+        return None, "无法找到合适的终点悬停点"
+    
     def plan_horizontal_avoidance(self, start_wp, end_wp, bias=0):
         """
         【严格】强制水平绕行路径规划 - 绝不穿行
@@ -485,21 +532,37 @@ class GridPathPlanner:
             if escape_wp is None:
                 return None, f"起点在障碍物安全边界内，且{escape_msg}"
             # 成功找到起飞避让点，继续规划从避让点到终点的路径
-            # 先检查终点
+            # 【修改】处理终点在障碍物内的情况
             if self.is_collision(end[0], end[1], flight_alt):
-                return None, "终点在障碍物安全边界内"
-            # 规划从避让点到终点的路径
+                hover_wp, hover_msg = self.plan_landing_approach(end_wp, flight_alt)
+                if hover_wp is None:
+                    return None, f"起点需避让，但{hover_msg}"
+                # 规划到悬停点的路径
+                result, msg = self._plan_path_from_escape(escape_wp, hover_wp, flight_alt, bias)
+                if result:
+                    full_path = [start_wp, escape_wp] + result[1:]
+                    return full_path, f"【起飞避让+终点悬停】{escape_msg}，飞行至目标附近后{hover_msg}"
+                else:
+                    return None, f"起飞避让成功，但到悬停点路径规划失败"
+            # 终点安全，正常规划
             result, msg = self._plan_path_from_escape(escape_wp, end_wp, flight_alt, bias)
             if result:
-                # 构建完整路径：起点 → 避让点 → 后续航点
-                full_path = [start_wp, escape_wp] + result[1:]  # result[1:] 避开重复的避让点
+                full_path = [start_wp, escape_wp] + result[1:]
                 return full_path, f"【起飞避让】{escape_msg}，然后{msg}"
             else:
                 return None, f"起飞避让成功，但后续路径规划失败: {msg}"
         
-        # 【保持】终点检查
+        # 【修改】处理终点在障碍物内的情况 - 寻找悬停点
         if self.is_collision(end[0], end[1], flight_alt):
-            return None, "终点在障碍物安全边界内"
+            hover_wp, hover_msg = self.plan_landing_approach(end_wp, flight_alt)
+            if hover_wp is None:
+                return None, f"终点在障碍物安全边界内，且{hover_msg}"
+            # 规划到悬停点的路径
+            result, msg = self._plan_path_from_start(start_wp, hover_wp, flight_alt, bias)
+            if result:
+                return result, f"【终点悬停】{msg}，到达后{hover_msg}"
+            else:
+                return None, f"到悬停点路径规划失败: {msg}"
         
         # 【关键】首先检查直线路径是否安全
         if not self.line_hits_obstacle(start, end, flight_alt):
@@ -628,6 +691,106 @@ class GridPathPlanner:
                 return None, "路径验证失败"
         
         return None, "无法找到可行的绕行路径"
+    
+    def _plan_path_from_start(self, start_wp, hover_wp, flight_alt, bias=0):
+        """
+        【辅助方法】从起点规划到终点悬停点的路径
+        这是 plan_horizontal_avoidance 的简化版本，终点是悬停点
+        """
+        start = (start_wp.lat, start_wp.lon)
+        end = (hover_wp.lat, hover_wp.lon)
+        
+        # 检查直线路径
+        if not self.line_hits_obstacle(start, end, flight_alt):
+            return [start_wp, hover_wp], "直线路径安全"
+        
+        # 复用主规划逻辑
+        lat_min, lat_max, lon_min, lon_max = self.get_bounding_box_with_obstacles(start, end)
+        
+        lat_range = lat_max - lat_min
+        lon_range = lon_max - lon_min
+        if bias < 0:
+            lon_min -= lon_range * 0.5
+            lon_max -= lon_range * 0.1
+        elif bias > 0:
+            lon_max += lon_range * 0.5
+            lon_min += lon_range * 0.1
+        
+        base_lat = lat_min
+        base_lon = lon_min
+        
+        start_grid = self.latlon_to_grid(start[0], start[1], base_lat, base_lon)
+        end_grid = self.latlon_to_grid(end[0], end[1], base_lat, base_lon)
+        
+        directions = [
+            (0,1), (1,0), (0,-1), (-1,0),
+            (1,1), (1,-1), (-1,1), (-1,-1),
+            (0,2), (2,0), (0,-2), (-2,0),
+            (2,2), (2,-2), (-2,2), (-2,-2),
+            (0,3), (3,0), (0,-3), (-3,0),
+            (1,2), (2,1), (-1,2), (-2,1), (1,-2), (2,-1), (-1,-2), (-2,-1),
+        ]
+        
+        open_set = [(0, 0, start_grid[0], start_grid[1], [start_grid])]
+        visited = {}
+        iteration = 0
+        best_path = None
+        best_dist = float('inf')
+        
+        while open_set and iteration < self.max_iterations:
+            iteration += 1
+            f_cost, g_cost, x, y, path = heapq.heappop(open_set)
+            
+            if abs(x - end_grid[0]) <= 2 and abs(y - end_grid[1]) <= 2:
+                waypoints = [start_wp]
+                for grid in path[1:]:
+                    lat, lon = self.grid_to_latlon(grid[0], grid[1], base_lat, base_lon)
+                    waypoints.append(Waypoint(lat, lon, flight_alt, 16, len(waypoints)))
+                waypoints.append(hover_wp)
+                waypoints[-1].seq = len(waypoints) - 1
+                waypoints = self.smooth_path(waypoints, flight_alt)
+                
+                if self.validate_path(waypoints, flight_alt):
+                    current_dist = sum(self.haversine_distance(
+                        waypoints[i].lat, waypoints[i].lon, 
+                        waypoints[i+1].lat, waypoints[i+1].lon) for i in range(len(waypoints)-1))
+                    if current_dist < best_dist:
+                        best_dist = current_dist
+                        best_path = waypoints
+                if iteration > 10000:
+                    break
+                continue
+            
+            key = (x, y)
+            if key in visited and visited[key] <= g_cost:
+                continue
+            visited[key] = g_cost
+            
+            for dx, dy in directions:
+                nx, ny = x + dx, y + dy
+                lat, lon = self.grid_to_latlon(nx, ny, base_lat, base_lon)
+                if not (lat_min <= lat <= lat_max and lon_min <= lon <= lon_max):
+                    continue
+                if self.is_collision(lat, lon, flight_alt):
+                    continue
+                curr_lat, curr_lon = self.grid_to_latlon(x, y, base_lat, base_lon)
+                if self.line_hits_obstacle((curr_lat, curr_lon), (lat, lon), flight_alt):
+                    continue
+                move_cost = math.sqrt(dx**2 + dy**2) * self.grid_size
+                new_g_cost = g_cost + move_cost
+                if (nx, ny) in visited and visited[(nx, ny)] <= new_g_cost:
+                    continue
+                h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
+                if bias < 0:
+                    h += (nx - start_grid[0]) * self.grid_size * 0.8
+                elif bias > 0:
+                    h -= (nx - start_grid[0]) * self.grid_size * 0.8
+                heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
+        
+        if best_path is not None:
+            if self.validate_path(best_path, flight_alt):
+                return best_path, "规划成功"
+        return None, "无法找到可行路径"
     
     def _plan_path_from_escape(self, escape_wp, end_wp, flight_alt, bias=0):
         """
@@ -927,8 +1090,9 @@ def init_session_state():
         'flight_start_time': None,
         # 障碍物记忆
         'saved_obstacles': [],
-        # 起飞避让标记
+        # 起飞避让和终点悬停标记
         'has_takeoff_escape': False,
+        'has_landing_hover': False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -974,9 +1138,11 @@ with st.sidebar:
         st.metric("选中路径", path_name)
         st.metric("航点数量", len(st.session_state.waypoints))
         
-        # 起飞避让状态
+        # 起飞避让和终点悬停状态
         if st.session_state.get('has_takeoff_escape'):
             st.warning("🚨 起飞需避让")
+        if st.session_state.get('has_landing_hover'):
+            st.info("🚁 终点需悬停")
     
     if st.session_state.get('available_paths'):
         st.metric("可选路径数", len(st.session_state['available_paths']))
@@ -1521,7 +1687,7 @@ if page == "🗺️ 航线规划":
                 st.session_state.flight_altitude
             )
             if end_collision:
-                st.error("❌ **终点在障碍物安全半径内！** 请调整终点位置，确保其在安全区域外。")
+                st.info("ℹ️ **终点在障碍物安全半径内！** 系统将自动规划「终点悬停」路径：飞行至目标最近安全点悬停，并提示操作员。")
         
         # 检查是否可以爬升飞越
         force_avoidance = st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude)
@@ -1579,33 +1745,69 @@ if page == "🗺️ 航线规划":
                 col_path, col_btn = st.columns([3, 1])
                 
                 with col_path:
-                    # 检查是否包含起飞避让
+                    # 检查是否包含起飞避让或终点悬停
                     first_wp = path_info['path'][0]
-                    start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], st.session_state.flight_altitude, 22)
+                    last_wp = path_info['path'][-1]
+                    
+                    # 起点避让：第一个航点远离起点
                     is_escape = len(path_info['path']) > 2 and (
                         abs(first_wp.lat - st.session_state.point_a[0]) > 0.00001 or
                         abs(first_wp.lon - st.session_state.point_a[1]) > 0.00001
                     )
                     
-                    escape_badge = "🚨【起飞避让】" if is_escape else ""
+                    # 终点悬停：最后一个航点远离终点
+                    is_hover = len(path_info['path']) > 2 and (
+                        abs(last_wp.lat - st.session_state.point_b[0]) > 0.00001 or
+                        abs(last_wp.lon - st.session_state.point_b[1]) > 0.00001
+                    )
+                    
+                    badge = ""
+                    if is_escape and is_hover:
+                        badge = "🚨【起飞避让+终点悬停】"
+                    elif is_escape:
+                        badge = "🚨【起飞避让】"
+                    elif is_hover:
+                        badge = "🚁【终点悬停】"
                     
                     if path_info['type'] == 'climb':
-                        st.write(f"{escape_badge}{path_info['name']}: {path_info['distance']:.0f}m, 最高{path_info['max_altitude']:.0f}m")
+                        st.write(f"{badge}{path_info['name']}: {path_info['distance']:.0f}m, 最高{path_info['max_altitude']:.0f}m")
                     else:
-                        st.write(f"{escape_badge}{path_info['name']}: {path_info['distance']:.0f}m, {len(path_info['path'])}个航点")
+                        st.write(f"{badge}{path_info['name']}: {path_info['distance']:.0f}m, {len(path_info['path'])}个航点")
                     
-                    # 显示起飞避让提示
-                    if is_escape:
+                    # 显示提示
+                    if is_escape and is_hover:
+                        st.warning("⚠️ 起点需避让起飞，终点需附近悬停")
+                    elif is_escape:
                         st.warning("⚠️ 起点在障碍物安全半径内，路径包含先避让起飞阶段")
+                    elif is_hover:
+                        st.info("ℹ️ 终点在障碍物安全半径内，将在最近安全点悬停")
                 
                 with col_btn:
-                    btn_label = "选择(含避让)" if is_escape else "选择"
+                    if is_escape and is_hover:
+                        btn_label = "选择(避让+悬停)"
+                    elif is_escape:
+                        btn_label = "选择(含避让)"
+                    elif is_hover:
+                        btn_label = "选择(含悬停)"
+                    else:
+                        btn_label = "选择"
+                    
                     if st.button(btn_label, key=f"select_{path_key}"):
                         st.session_state.waypoints = path_info['path']
                         st.session_state.selected_path_type = path_info['type']
                         st.session_state.selected_path_name = path_info['name']
                         st.session_state.has_takeoff_escape = is_escape
-                        st.success(f"✅ 已选择: {path_info['name']}" + ("（含起飞避让）" if is_escape else ""))
+                        st.session_state.has_landing_hover = is_hover
+                        
+                        note = ""
+                        if is_escape and is_hover:
+                            note = "（含起飞避让和终点悬停）"
+                        elif is_escape:
+                            note = "（含起飞避让）"
+                        elif is_hover:
+                            note = "（含终点悬停）"
+                        
+                        st.success(f"✅ 已选择: {path_info['name']}{note}")
                         st.rerun()
         
         # 显示当前选中的路径
@@ -2129,4 +2331,13 @@ elif page == "✈️ 飞行监控":
                     </div>
                     """, unsafe_allow_html=True)
         
-        # ===========
+        # ==========================================
+        # 【已移除】自动推进逻辑已移到页面顶部
+        # 页面通过自然刷新（按钮点击等）更新状态
+        # ==========================================
+
+
+
+
+st.markdown("---")
+st.caption("MAVLink GCS v1.9 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
