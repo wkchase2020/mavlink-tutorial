@@ -1904,10 +1904,22 @@ elif page == "✈️ 飞行监控":
         # ==========================================
         # 【核心修复】基于时间的飞行推进逻辑
         # ==========================================
+        # 【修复】计算总飞行时间：距离/速度，确保300米需要约35-40秒
+        total_distance = sum(
+            st.session_state.planner.haversine_distance(
+                st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon,
+                st.session_state.waypoints[i+1].lat, st.session_state.waypoints[i+1].lon
+            ) for i in range(len(st.session_state.waypoints)-1)
+        )
+        # 速度约8.5m/s，总飞行时间 = 距离 / 速度，每个航点时间 = 总时间 / 航段数
+        avg_speed = 8.5  # m/s
+        total_flight_time = total_distance / avg_speed  # 总飞行时间（秒）
+        segment_time = total_flight_time / max(1, total_wp - 1) if total_wp > 1 else 5  # 每个航段的飞行时间
+        
         if st.session_state.mission_executing and st.session_state.flight_start_time:
             elapsed = time.time() - st.session_state.flight_start_time
-            # 每1.5秒飞完一个航点
-            target_wp_idx = min(int(elapsed / 1.5), total_wp - 1)
+            # 基于实际距离计算当前应该到达的航点
+            target_wp_idx = min(int(elapsed / segment_time), total_wp - 1)
             
             # 航点有变化
             if target_wp_idx > curr_idx:
@@ -1976,8 +1988,7 @@ elif page == "✈️ 飞行监控":
             # 【简化】直接根据当前航点索引计算无人机位置
             if st.session_state.mission_executing and st.session_state.flight_start_time:
                 elapsed = time.time() - st.session_state.flight_start_time
-                # 计算在当前航段的进度
-                segment_time = 1.5  # 每个航段飞行时间
+                # 【修复】使用与上方相同的segment_time计算
                 current_seg = int(elapsed / segment_time)
                 seg_progress = (elapsed % segment_time) / segment_time
                 
@@ -2025,10 +2036,11 @@ elif page == "✈️ 飞行监控":
                         color=color, fill=True, fillOpacity=0.3
                     ).add_to(m)
             
-            # 绘制计划航线（灰色虚线）- 任务完成后隐藏，避免与已飞路径重叠
+            # 绘制计划航线（灰色虚线）- 【修复】任务完成后或飞行中完全隐藏
             if st.session_state.waypoints:
-                # 只在任务执行中或未开始时显示计划航线
-                show_plan = st.session_state.mission_executing or not st.session_state.flight_start_time
+                # 【修复】更严格的显示条件：只在未开始且未设置飞行时间时显示
+                # 任务执行中或完成后都不显示计划航线
+                show_plan = not st.session_state.flight_start_time and not st.session_state.mission_executing
                 if show_plan:
                     path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
                     folium.PolyLine(
