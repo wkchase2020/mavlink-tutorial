@@ -2138,11 +2138,7 @@ elif page == "✈️ 飞行监控":
             folium.LayerControl(position='topright').add_to(m)
             
             if st.session_state.waypoints:
-                # 计划航线（灰色虚线）
-                path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
-                folium.PolyLine(path_coords, color='gray', weight=2, opacity=0.5, dash_array='5,10', popup="计划航线").add_to(m)
-                
-                # 航点详细显示
+                # 航点详细显示（不显示计划航线，只显示航点标记）
                 for i, wp in enumerate(st.session_state.waypoints):
                     if i == 0:
                         folium.Marker([wp.lat, wp.lon], 
@@ -2157,9 +2153,13 @@ elif page == "✈️ 飞行监控":
                         folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True, fillOpacity=0.8,
                             popup=f"航点 #{i}<br>高度: {wp.alt}m<br>({wp.lat:.6f}, {wp.lon:.6f})").add_to(m)
                 
-                # 已飞路径（亮绿色实线）
-                if st.session_state.drone_pos_index > 0:
+                # 已飞路径（亮绿色实线）- 只在飞行过程中显示，不显示完整航线
+                if st.session_state.mission_executing and st.session_state.drone_pos_index > 0:
+                    # 只显示实际已飞的路径，不是从起点开始的完整连线
                     flown_path = st.session_state.all_flight_positions[:st.session_state.drone_pos_index+1]
+                    # 如果路径太长（超过100个点），只显示最近的部分，避免显示完整连线
+                    if len(flown_path) > 100:
+                        flown_path = flown_path[-100:]
                     folium.PolyLine(flown_path, color='#00FF00', weight=5, opacity=0.9, popup="已飞路径").add_to(m)
             
             # 无人机当前位置
