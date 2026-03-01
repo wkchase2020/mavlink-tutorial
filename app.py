@@ -1898,6 +1898,7 @@ elif page == "✈️ 飞行监控":
                 st.session_state.current_waypoint_index = 0
                 st.session_state.drone_position = None
                 st.session_state.flight_start_time = None
+                st.session_state.flight_complete_time = None
                 st.session_state.logged_waypoints = set()
                 
                 # 【关键】清除路径时间缓存
@@ -1958,6 +1959,8 @@ elif page == "✈️ 飞行监控":
                 # 到达终点
                 if curr_idx >= total_wp - 1:
                     st.session_state.mission_executing = False
+                    # 【修复】记录任务完成时间，用于停止计时
+                    st.session_state.flight_complete_time = time.time()
                     st.session_state.comm_logger.log_flight_complete()
                     timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
                     st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: MISSION_COMPLETE")
@@ -1967,9 +1970,15 @@ elif page == "✈️ 飞行监控":
         # ==========================================
         st.markdown("---")
         
+        # 【修复】飞行时间计算 - 任务完成后停止计时
         flight_time = 0
         if st.session_state.flight_start_time:
-            flight_time = int(time.time() - st.session_state.flight_start_time)
+            if hasattr(st.session_state, 'flight_complete_time') and st.session_state.flight_complete_time:
+                # 任务已完成，使用完成时的时间
+                flight_time = int(st.session_state.flight_complete_time - st.session_state.flight_start_time)
+            else:
+                # 任务进行中
+                flight_time = int(time.time() - st.session_state.flight_start_time)
         
         flight_speed = 8.5
         if st.session_state.mission_executing:
@@ -2006,24 +2015,15 @@ elif page == "✈️ 飞行监控":
         with main_col:
             st.subheader("🗺️ 实时飞行地图")
             
-            # 【修复】基于实际距离的无人机位置计算
-            if st.session_state.mission_executing and st.session_state.flight_start_time:
+            # 【修复】基于当前航点索引计算无人机位置，确保与航点推进逻辑一致
+            if st.session_state.mission_executing and st.session_state.flight_start_time and curr_idx < total_wp - 1:
+                # 飞行中：在当前航段内插值
                 elapsed = time.time() - st.session_state.flight_start_time
                 
-                # 基于累计时间找到当前航段
-                current_seg = 0
-                for i, cum_time in enumerate(st.session_state.waypoint_cumulative_times):
-                    if elapsed >= cum_time:
-                        current_seg = i
-                    else:
-                        break
-                current_seg = min(current_seg, total_wp - 1)
-                next_seg = min(current_seg + 1, total_wp - 1)
-                
-                # 在当前航段内插值
-                if current_seg < len(st.session_state.waypoint_cumulative_times) - 1:
-                    seg_start_time = st.session_state.waypoint_cumulative_times[current_seg]
-                    seg_end_time = st.session_state.waypoint_cumulative_times[current_seg + 1]
+                # 计算当前航段进度
+                if curr_idx < len(st.session_state.waypoint_cumulative_times) - 1:
+                    seg_start_time = st.session_state.waypoint_cumulative_times[curr_idx]
+                    seg_end_time = st.session_state.waypoint_cumulative_times[curr_idx + 1]
                     seg_duration = seg_end_time - seg_start_time
                     seg_elapsed = elapsed - seg_start_time
                     seg_progress = max(0, min(1, seg_elapsed / seg_duration)) if seg_duration > 0 else 0
@@ -2031,22 +2031,24 @@ elif page == "✈️ 飞行监控":
                     seg_progress = 0
                 
                 # 插值计算当前位置
-                curr_wp = st.session_state.waypoints[current_seg]
-                next_wp = st.session_state.waypoints[next_seg]
+                curr_wp = st.session_state.waypoints[curr_idx]
+                next_wp = st.session_state.waypoints[curr_idx + 1]
                 drone_lat = curr_wp.lat + (next_wp.lat - curr_wp.lat) * seg_progress
                 drone_lon = curr_wp.lon + (next_wp.lon - curr_wp.lon) * seg_progress
                 drone_pos = [drone_lat, drone_lon]
                 
-                # 保存位置用于暂停/完成后显示
+                # 保存位置
                 st.session_state.drone_position = drone_pos
-            elif st.session_state.flight_start_time and not st.session_state.mission_executing and curr_idx >= total_wp - 1:
-                # 任务完成后，无人机停在终点
+            elif curr_idx >= total_wp - 1 and st.session_state.waypoints:
+                # 到达终点或任务完成
                 drone_pos = [st.session_state.waypoints[-1].lat, st.session_state.waypoints[-1].lon]
                 st.session_state.drone_position = drone_pos
             elif st.session_state.drone_position:
                 drone_pos = st.session_state.drone_position
-            else:
+            elif st.session_state.waypoints:
                 drone_pos = [st.session_state.waypoints[0].lat, st.session_state.waypoints[0].lon]
+            else:
+                drone_pos = [32.0603, 118.7969]
             
             # 创建地图
             m = folium.Map(location=drone_pos, zoom_start=17, tiles="OpenStreetMap")
