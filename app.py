@@ -1,5 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit_autorefresh import st_autorefresh
 import time
 import math
 import heapq
@@ -448,10 +449,12 @@ class GridPathPlanner:
         # 根据偏向调整边界框（实现左右绕行）
         lat_range = lat_max - lat_min
         lon_range = lon_max - lon_min
-        if bias < 0:  # 左偏 - 扩展西侧边界
-            lon_min -= lon_range * 0.3
-        elif bias > 0:  # 右偏 - 扩展东侧边界
-            lon_max += lon_range * 0.3
+        if bias < 0:  # 左偏 - 大幅扩展西侧边界
+            lon_min -= lon_range * 0.5
+            lon_max -= lon_range * 0.1  # 收缩东侧
+        elif bias > 0:  # 右偏 - 大幅扩展东侧边界
+            lon_max += lon_range * 0.5
+            lon_min += lon_range * 0.1  # 收缩西侧
         
         base_lat = lat_min
         base_lon = lon_min
@@ -543,12 +546,15 @@ class GridPathPlanner:
                 h = math.sqrt((nx - end_grid[0])**2 + (ny - end_grid[1])**2) * self.grid_size
                 
                 # 【关键】添加绕行偏向到启发函数
-                # bias < 0 (左偏/西): 鼓励向西走 (nx较小)
-                # bias > 0 (右偏/东): 鼓励向东走 (nx较大)
-                if bias < 0:  # 左绕行 - 优先选择西侧(x较小)的路径
-                    h += (nx - start_grid[0]) * self.grid_size * 0.3
-                elif bias > 0:  # 右绕行 - 优先选择东侧(x较大)的路径
-                    h += (start_grid[0] - nx) * self.grid_size * 0.3
+                # bias < 0 (左偏): 鼓励向西(nx较小)，惩罚向东(nx较大)
+                # bias > 0 (右偏): 鼓励向东(nx较大)，惩罚向西(nx较小)
+                dx_from_start = nx - start_grid[0]
+                if bias < 0:  # 左绕行 - 优先向西
+                    # 向东移动(nx大)时增加成本，向西移动(nx小)时减少成本
+                    h += dx_from_start * self.grid_size * 0.8
+                elif bias > 0:  # 右绕行 - 优先向东
+                    # 向西移动(nx小)时增加成本，向东移动(nx大)时减少成本
+                    h -= dx_from_start * self.grid_size * 0.8
                 
                 heapq.heappush(open_set, (new_g_cost + h, new_g_cost, nx, ny, path + [(nx, ny)]))
         
@@ -1431,6 +1437,10 @@ if page == "🗺️ 航线规划":
 elif page == "✈️ 飞行监控":
     st.title("🚁 飞行实时画面 - 任务执行监控")
     
+    # 自动刷新控制 - 只在任务执行时启用
+    if st.session_state.get('mission_executing', False):
+        st_autorefresh(interval=500, limit=None, key="flight_autorefresh")
+    
     if not st.session_state.mission_sent:
         st.warning("⚠️ 请先规划并上传航线")
     else:
@@ -1448,24 +1458,29 @@ elif page == "✈️ 飞行监控":
                     st.session_state.mission_executing = True
                     st.session_state.current_waypoint_index = 0
                     st.session_state.flight_path_history = []
-                    st.session_state.wp_reached_log = set()
+                    st.session_state.logged_waypoints = set()
                     
                     # 预计算所有飞行位置点
                     positions = []
                     steps_per_segment = 30
-                    for i in range(len(st.session_state.waypoints) - 1):
+                    total_waypoints = len(st.session_state.waypoints)
+                    
+                    for i in range(total_waypoints - 1):
                         curr, next_wp = st.session_state.waypoints[i], st.session_state.waypoints[i + 1]
                         for step in range(steps_per_segment):
                             t = step / steps_per_segment
                             positions.append([
                                 curr.lat + (next_wp.lat - curr.lat) * t,
                                 curr.lon + (next_wp.lon - curr.lon) * t,
-                                curr.alt + (next_wp.alt - curr.alt) * t
+                                curr.alt + (next_wp.alt - curr.alt) * t,
+                                i  # 记录当前所在航段索引
                             ])
+                    # 添加终点（精确到最后一个航点位置）
                     positions.append([
                         st.session_state.waypoints[-1].lat,
                         st.session_state.waypoints[-1].lon,
-                        st.session_state.waypoints[-1].alt
+                        st.session_state.waypoints[-1].alt,
+                        total_waypoints - 1  # 最后一个航点索引
                     ])
                     st.session_state.all_flight_positions = positions
                     st.session_state.drone_pos_index = 0
@@ -1520,6 +1535,7 @@ elif page == "✈️ 飞行监控":
                 st.session_state.all_flight_positions = []
                 st.session_state.flown_distance = 0
                 st.session_state.flight_start_time = None
+                st.session_state.logged_waypoints = set()
                 st.rerun()
         
         with ctrl_cols[4]:
@@ -1886,7 +1902,7 @@ elif page == "✈️ 飞行监控":
                     """, unsafe_allow_html=True)
         
         # ==========================================
-        # 自动推进飞行位置
+        # 自动推进飞行位置 (由st_autorefresh触发刷新)
         # ==========================================
         if st.session_state.mission_executing and st.session_state.all_flight_positions:
             idx = st.session_state.drone_pos_index
@@ -1894,38 +1910,55 @@ elif page == "✈️ 飞行监控":
             
             if idx < total_pos - 1:
                 old_wp_idx = st.session_state.current_waypoint_index
-                st.session_state.drone_pos_index += 1
-                new_wp_idx = min(st.session_state.drone_pos_index // 30, total_wp - 1)
+                # 每次前进3步，使动画更平滑但刷新更稳定
+                st.session_state.drone_pos_index = min(idx + 3, total_pos - 1)
+                
+                # 使用positions中存储的航段索引来精确确定当前航点
+                current_pos_data = st.session_state.all_flight_positions[st.session_state.drone_pos_index]
+                new_wp_idx = current_pos_data[3] if len(current_pos_data) > 3 else min(st.session_state.drone_pos_index // 30, total_wp - 1)
+                
                 st.session_state.current_waypoint_index = new_wp_idx
-                st.session_state.drone_position = st.session_state.all_flight_positions[st.session_state.drone_pos_index][:2]
+                st.session_state.drone_position = current_pos_data[:2]
                 
-                # 更新已飞距离
-                st.session_state.flown_distance = sum(
-                    st.session_state.planner.haversine_distance(
-                        st.session_state.all_flight_positions[j][0], st.session_state.all_flight_positions[j][1],
-                        st.session_state.all_flight_positions[j+1][0], st.session_state.all_flight_positions[j+1][1]
-                    ) for j in range(0, st.session_state.drone_pos_index)
-                )
-                
-                # 航点到达日志
+                # 航点到达日志 (只记录一次)
                 if new_wp_idx > old_wp_idx and new_wp_idx < total_wp:
                     timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
-                    st.session_state.comm_logger.log_waypoint_reached(new_wp_idx, total_wp)
-                    st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WP_REACHED_ACK #{new_wp_idx}")
-                    st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: MISSION_ITEM_REACHED #{new_wp_idx}")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC: MISSION_CURRENT #{new_wp_idx+1}")
-                    st.session_state.recv_log.append(f"[{timestamp}] OBC→GCS: WP_REACHED #{new_wp_idx}")
+                    if not hasattr(st.session_state, 'logged_waypoints'):
+                        st.session_state.logged_waypoints = set()
+                    if new_wp_idx not in st.session_state.logged_waypoints:
+                        st.session_state.logged_waypoints.add(new_wp_idx)
+                        st.session_state.comm_logger.log_waypoint_reached(new_wp_idx, total_wp)
+                        st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WP_REACHED_ACK #{new_wp_idx}")
+                        st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: MISSION_ITEM_REACHED #{new_wp_idx}")
+                        st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC: MISSION_CURRENT #{new_wp_idx+1}")
+                        st.session_state.recv_log.append(f"[{timestamp}] OBC→GCS: WP_REACHED #{new_wp_idx}")
                 
-                # 遥测数据
-                if st.session_state.drone_pos_index % 5 == 0:
+                # 遥测数据 (限制频率)
+                if st.session_state.drone_pos_index % 10 == 0:
                     timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
                     pos = st.session_state.drone_position
-                    alt = st.session_state.all_flight_positions[st.session_state.drone_pos_index][2] if len(st.session_state.all_flight_positions[0]) > 2 else 50
+                    alt = current_pos_data[2] if len(current_pos_data) > 2 else 50
                     st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: TELEMETRY lat={pos[0]:.6f} lon={pos[1]:.6f} alt={alt:.1f} spd={flight_speed:.1f}")
                 
-                time.sleep(0.08)
-                st.rerun()
+                # 不调用time.sleep和st.rerun()，由st_autorefresh自动刷新
             else:
+                # 到达终点，确保最后一个航点被标记为完成
+                st.session_state.current_waypoint_index = total_wp - 1
+                st.session_state.drone_position = st.session_state.all_flight_positions[-1][:2]
+                
+                # 记录最后一个航点到达
+                last_wp = total_wp - 1
+                if not hasattr(st.session_state, 'logged_waypoints'):
+                    st.session_state.logged_waypoints = set()
+                if last_wp not in st.session_state.logged_waypoints:
+                    st.session_state.logged_waypoints.add(last_wp)
+                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S.%f")[:-3]
+                    st.session_state.comm_logger.log_waypoint_reached(last_wp, total_wp)
+                    st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WP_REACHED_ACK #{last_wp}")
+                    st.session_state.send_log.append(f"[{timestamp}] OBC→FCU: MISSION_ITEM_REACHED #{last_wp}")
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC: MISSION_CURRENT #{last_wp}")
+                    st.session_state.recv_log.append(f"[{timestamp}] OBC→GCS: WP_REACHED #{last_wp} (FINAL)")
+                
                 # 任务完成
                 st.session_state.mission_executing = False
                 st.session_state.comm_logger.log_flight_complete()
@@ -1939,4 +1972,4 @@ elif page == "✈️ 飞行监控":
 
 
 st.markdown("---")
-st.caption("MAVLink GCS v6.0 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
+st.caption("MAVLink GCS v1.9 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
