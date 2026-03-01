@@ -1987,15 +1987,26 @@ elif page == "✈️ 飞行监控":
         # ==========================================
         main_col, right_col = st.columns([3, 2])
         
+        # 【关键】在整个地图绘制区域前计算segment_time，确保可用
+        # 计算总飞行时间
+        total_distance = sum(
+            st.session_state.planner.haversine_distance(
+                st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon,
+                st.session_state.waypoints[i+1].lat, st.session_state.waypoints[i+1].lon
+            ) for i in range(len(st.session_state.waypoints)-1)
+        )
+        avg_speed = 8.5  # m/s
+        total_flight_time = total_distance / avg_speed
+        map_segment_time = total_flight_time / max(1, total_wp - 1) if total_wp > 1 else 5
+        
         with main_col:
             st.subheader("🗺️ 实时飞行地图")
             
-            # 【简化】直接根据当前航点索引计算无人机位置
+            # 【修复】根据飞行状态计算无人机位置
             if st.session_state.mission_executing and st.session_state.flight_start_time:
                 elapsed = time.time() - st.session_state.flight_start_time
-                # 【修复】使用与上方相同的segment_time计算
-                current_seg = int(elapsed / segment_time)
-                seg_progress = (elapsed % segment_time) / segment_time
+                current_seg = int(elapsed / map_segment_time)
+                seg_progress = (elapsed % map_segment_time) / map_segment_time
                 
                 current_seg = min(current_seg, total_wp - 1)
                 next_seg = min(current_seg + 1, total_wp - 1)
@@ -2041,26 +2052,27 @@ elif page == "✈️ 飞行监控":
                         color=color, fill=True, fillOpacity=0.3
                     ).add_to(m)
             
-            # 绘制计划航线（灰色虚线）- 【修复】任务开始后完全不显示
-            if st.session_state.waypoints:
-                # 【修复】使用简单明确的条件：只要开始过飞行就不显示计划航线
-                show_plan = not st.session_state.flight_start_time
-                if show_plan:
-                    path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
-                    folium.PolyLine(
-                        path_coords, 
-                        color='gray', 
-                        weight=2, 
-                        opacity=0.5, 
-                        dash_array='5,10',
-                        popup="计划航线"
-                    ).add_to(m)
+            # 【修复】计划航线：严格只在飞行前显示，飞行中及飞行后都不显示
+            # 使用 flight_start_time 是否为 None 来判断
+            has_never_flown = st.session_state.flight_start_time is None
+            if st.session_state.waypoints and has_never_flown:
+                path_coords = [[wp.lat, wp.lon] for wp in st.session_state.waypoints]
+                folium.PolyLine(
+                    path_coords, 
+                    color='gray', 
+                    weight=2, 
+                    opacity=0.5, 
+                    dash_array='5,10',
+                    popup="计划航线"
+                ).add_to(m)
                 
-                # 【修复】绘制航点 - 使用logged_waypoints判断完成状态
+                # 【修复】绘制航点 - 使用最新的 current_wp_idx
                 logged = getattr(st.session_state, 'logged_waypoints', set())
+                # 使用最新的航点索引
+                latest_curr_idx = st.session_state.current_waypoint_index
                 for i, wp in enumerate(st.session_state.waypoints):
-                    is_completed = i in logged or i < curr_idx
-                    is_current = i == curr_idx and st.session_state.mission_executing
+                    is_completed = i in logged or i < latest_curr_idx
+                    is_current = i == latest_curr_idx and st.session_state.mission_executing
                     
                     if i == 0:
                         folium.Marker(
@@ -2087,11 +2099,14 @@ elif page == "✈️ 飞行监控":
                             popup=f"航点 WP{i}<br>高度: {wp.alt}m<br>状态: {'✅已完成' if is_completed else ('🚁当前' if is_current else '⏳待执行')}"
                         ).add_to(m)
                 
-                # 【简化】绘制已飞路径 - 从起点到当前位置
-                if curr_idx > 0 or (st.session_state.mission_executing and st.session_state.flight_start_time):
+                # 【修复】绘制已飞路径 - 使用最新的 curr_idx
+                # 重新获取 curr_idx 确保是最新值
+                current_wp_idx = st.session_state.current_waypoint_index
+                if current_wp_idx > 0 or st.session_state.mission_executing:
                     flown_coords = [[st.session_state.waypoints[0].lat, st.session_state.waypoints[0].lon]]
-                    for i in range(1, curr_idx + 1):
-                        flown_coords.append([st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon])
+                    for i in range(1, current_wp_idx + 1):
+                        if i < len(st.session_state.waypoints):
+                            flown_coords.append([st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon])
                     # 添加当前无人机位置
                     flown_coords.append(drone_pos)
                     
