@@ -158,7 +158,7 @@ class CommLinkLogger:
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="MAVLink 地面站 - 安全避障系统",
+    page_title="地面站 - 安全避障系统（MAVlink）",
     page_icon="🚁",
     layout="wide",
     initial_sidebar_state="expanded"
