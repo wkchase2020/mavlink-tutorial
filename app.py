@@ -3,11 +3,18 @@ import streamlit.components.v1 as components
 import time
 import math
 import heapq
+import json
+import os
 from datetime import datetime, timedelta
 from collections import deque
 import folium
 from folium.plugins import Draw, AntPath
 from streamlit_folium import st_folium
+
+# ==================== 版本信息 ====================
+VERSION = "v12.1"
+VERSION_NAME = "障碍物持久化版"
+OBSTACLE_CONFIG_FILE = "obstacle_config.json"
 
 # ==================== 坐标系转换工具类 ====================
 class CoordinateConverter:
@@ -158,7 +165,7 @@ class CommLinkLogger:
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="地面站 - 安全避障系统（MAVlink）",
+    page_title=f"MAVLink 地面站 - 安全避障系统 {VERSION}",
     page_icon="🚁",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1053,6 +1060,63 @@ class GridPathPlanner:
         return path
 
 
+# ==================== 障碍物配置持久化 ====================
+def save_obstacles_to_file(obstacles, filename=OBSTACLE_CONFIG_FILE):
+    """保存障碍物配置到JSON文件"""
+    config = {
+        'version': VERSION,
+        'save_time': (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
+        'obstacles': []
+    }
+    for obs in obstacles:
+        obs_data = {
+            'type': obs.type,
+            'points': obs.points,
+            'height': obs.height,
+            'name': obs.name,
+            'rotation': obs.rotation,
+            'width': obs.width,
+            'height_m': obs.height_m,
+            'radius': getattr(obs, 'radius', 30)
+        }
+        config['obstacles'].append(obs_data)
+    
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        return True, len(config['obstacles'])
+    except Exception as e:
+        return False, str(e)
+
+def load_obstacles_from_file(filename=OBSTACLE_CONFIG_FILE):
+    """从JSON文件加载障碍物配置"""
+    if not os.path.exists(filename):
+        return None, "配置文件不存在"
+    
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        return config, None
+    except Exception as e:
+        return None, str(e)
+
+def apply_obstacles_config(planner, config):
+    """应用障碍物配置到规划器"""
+    planner.clear_obstacles()
+    count = 0
+    for o in config.get('obstacles', []):
+        if o['type'] == 'circle':
+            planner.add_circle_obstacle(
+                o['points'][0][0], o['points'][0][1], o['radius'], o['height'], o['name'])
+        elif o['type'] == 'rectangle':
+            planner.add_rotated_rectangle_obstacle(
+                o['points'][0][0], o['points'][0][1], o['width'], o['height_m'], 
+                o['rotation'], o['height'], o['name'])
+        else:
+            planner.add_polygon_obstacle(o['points'], o['height'], o['name'])
+        count += 1
+    return count
+
 # ==================== 初始化 ====================
 def init_session_state():
     defaults = {
@@ -1099,6 +1163,17 @@ def init_session_state():
             st.session_state[key] = value
 
 init_session_state()
+
+# ==================== 启动时自动加载障碍物配置 ====================
+if 'auto_load_done' not in st.session_state:
+    st.session_state.auto_load_done = True
+    config, error = load_obstacles_from_file()
+    if config:
+        count = apply_obstacles_config(st.session_state.planner, config)
+        st.session_state.saved_obstacles = config.get('obstacles', [])
+        st.session_state.last_loaded_config = config
+        if count > 0:
+            st.toast(f"🎯 已自动加载 {count} 个障碍物配置", icon="✅")
 
 
 # ==================== 侧边栏 ====================
@@ -1159,12 +1234,16 @@ with st.sidebar:
             st.markdown(f"<small style='color:{color}'>{log['content'][:30]}...</small>", unsafe_allow_html=True)
     else:
         st.info("暂无通信记录")
+    
+    # 版本信息
+    st.markdown("---")
+    st.caption(f"📦 {VERSION} {VERSION_NAME}")
 
 
 # ==================== 航线规划页面 ====================
 if page == "🗺️ 航线规划":
-    st.title("🚁 MAVLink 地面站 - 严格避障系统")
-    st.caption("绝对安全绕行 | 严格碰撞检测 | 坐标系自动转换")
+    st.title(f"🚁 MAVLink 地面站 - 严格避障系统 {VERSION}")
+    st.caption(f"{VERSION_NAME} | 绝对安全绕行 | 严格碰撞检测 | 坐标系自动转换 | 障碍物持久化")
     
     # 显示安全警告
     if st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude):
@@ -1628,24 +1707,84 @@ if page == "🗺️ 航线规划":
                             st.rerun()
                 
                 st.markdown("---")
-                col_clear, col_save, col_load = st.columns(3)
-                with col_clear:
+                
+                # ====== 一键部署区域 ======
+                st.markdown("**🚀 障碍物配置持久化**")
+                st.caption(f"配置文件: `{OBSTACLE_CONFIG_FILE}` | 版本: {VERSION} {VERSION_NAME}")
+                
+                deploy_cols = st.columns([2, 2, 2, 2])
+                with deploy_cols[0]:
+                    if st.button("💾 保存到文件", type="primary", key="save_to_file"):
+                        if st.session_state.planner.obstacles:
+                            success, result = save_obstacles_to_file(st.session_state.planner.obstacles)
+                            if success:
+                                st.success(f"✅ 已保存 {result} 个障碍物")
+                                st.session_state.saved_obstacles = [{
+                                    'type': o.type, 'points': o.points, 'height': o.height, 'name': o.name,
+                                    'rotation': o.rotation, 'width': o.width, 'height_m': o.height_m, 
+                                    'radius': getattr(o, 'radius', 30)
+                                } for o in st.session_state.planner.obstacles]
+                            else:
+                                st.error(f"❌ 保存失败: {result}")
+                        else:
+                            st.warning("⚠️ 当前没有障碍物可保存")
+                
+                with deploy_cols[1]:
+                    if st.button("📂 从文件加载", key="load_from_file"):
+                        config, error = load_obstacles_from_file()
+                        if config:
+                            count = apply_obstacles_config(st.session_state.planner, config)
+                            st.session_state.saved_obstacles = config.get('obstacles', [])
+                            st.session_state.planned_path_horizontal = None
+                            st.session_state.planned_path_climb = None
+                            st.session_state.waypoints = []
+                            st.success(f"✅ 已加载 {count} 个障碍物 (保存于 {config.get('save_time', '未知时间')})")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ 加载失败: {error}")
+                
+                with deploy_cols[2]:
                     if st.button("🗑️ 清除全部", key="clear_all_obs"):
                         st.session_state.planner.clear_obstacles()
                         st.session_state.planned_path_horizontal = None
                         st.session_state.planned_path_climb = None
                         st.session_state.waypoints = []
                         st.rerun()
-                with col_save:
-                    if st.button("💾 记忆障碍物", key="save_obstacles"):
+                
+                with deploy_cols[3]:
+                    if st.button("🚀 一键部署", type="primary", key="one_click_deploy"):
+                        config, error = load_obstacles_from_file()
+                        if config:
+                            count = apply_obstacles_config(st.session_state.planner, config)
+                            st.session_state.saved_obstacles = config.get('obstacles', [])
+                            st.session_state.planned_path_horizontal = None
+                            st.session_state.planned_path_climb = None
+                            st.session_state.waypoints = []
+                            st.success(f"🚀 一键部署完成！已部署 {count} 个障碍物")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ 部署失败: {error}")
+                
+                # 显示当前配置状态
+                if os.path.exists(OBSTACLE_CONFIG_FILE):
+                    config, _ = load_obstacles_from_file()
+                    if config:
+                        st.info(f"📁 文件状态: 共 {len(config.get('obstacles', []))} 个障碍物 | 保存时间: {config.get('save_time', '未知')} | 版本: {config.get('version', '旧版')}")
+                else:
+                    st.info("📁 文件状态: 暂无保存的配置")
+                
+                st.markdown("---")
+                col_mem_save, col_mem_load = st.columns(2)
+                with col_mem_save:
+                    if st.button("💾 记忆到会话", key="save_obstacles"):
                         st.session_state.saved_obstacles = [{
                             'type': o.type, 'points': o.points, 'height': o.height, 'name': o.name,
                             'rotation': o.rotation, 'width': o.width, 'height_m': o.height_m, 
                             'radius': getattr(o, 'radius', 30)
                         } for o in st.session_state.planner.obstacles]
-                        st.success(f"✅ 已记忆 {len(st.session_state.saved_obstacles)} 个障碍物")
-                with col_load:
-                    if st.session_state.get('saved_obstacles') and st.button("🔄 恢复障碍物", key="load_obstacles"):
+                        st.success(f"✅ 已记忆 {len(st.session_state.saved_obstacles)} 个障碍物到会话")
+                with col_mem_load:
+                    if st.session_state.get('saved_obstacles') and st.button("🔄 从会话恢复", key="load_obstacles"):
                         st.session_state.planner.clear_obstacles()
                         for o in st.session_state.saved_obstacles:
                             if o['type'] == 'circle':
@@ -1657,7 +1796,7 @@ if page == "🗺️ 航线规划":
                                     o['rotation'], o['height'], o['name'])
                             else:
                                 st.session_state.planner.add_polygon_obstacle(o['points'], o['height'], o['name'])
-                        st.success(f"✅ 已恢复 {len(st.session_state.saved_obstacles)} 个障碍物")
+                        st.success(f"✅ 已从会话恢复 {len(st.session_state.saved_obstacles)} 个障碍物")
                         st.rerun()
         
         st.markdown("---")
@@ -2411,4 +2550,4 @@ elif page == "✈️ 飞行监控":
 
 
 st.markdown("---")
-st.caption("MAVLink GCS v1.9 | 严格避障 | 安全绕行 | 北京时间 (UTC+8)")
+st.caption(f"MAVLink GCS {VERSION} {VERSION_NAME} | 严格避障 | 安全绕行 | 障碍物持久化 | 北京时间 (UTC+8)")
