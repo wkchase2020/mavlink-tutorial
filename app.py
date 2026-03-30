@@ -12,7 +12,7 @@ from folium.plugins import Draw, AntPath
 from streamlit_folium import st_folium
 
 # ==================== 版本信息 ====================
-VERSION = "v12.1"
+VERSION = "v12.2"
 VERSION_NAME = "障碍物持久化版"
 # 获取脚本所在目录，确保配置文件始终和程序保存在同一位置
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
