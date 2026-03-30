@@ -14,7 +14,9 @@ from streamlit_folium import st_folium
 # ==================== 版本信息 ====================
 VERSION = "v12.1"
 VERSION_NAME = "障碍物持久化版"
-OBSTACLE_CONFIG_FILE = "obstacle_config.json"
+# 获取脚本所在目录，确保配置文件始终和程序保存在同一位置
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OBSTACLE_CONFIG_FILE = os.path.join(SCRIPT_DIR, "obstacle_config.json")
 
 # ==================== 坐标系转换工具类 ====================
 class CoordinateConverter:
@@ -1711,6 +1713,7 @@ if page == "🗺️ 航线规划":
                 # ====== 一键部署区域 ======
                 st.markdown("**🚀 障碍物配置持久化**")
                 st.caption(f"配置文件: `{OBSTACLE_CONFIG_FILE}` | 版本: {VERSION} {VERSION_NAME}")
+                st.markdown(f"<span style='font-size: 0.8em; color: #888;'>💡 文件保存在程序同目录下，绝对路径如上所示</span>", unsafe_allow_html=True)
                 
                 deploy_cols = st.columns([2, 2, 2, 2])
                 with deploy_cols[0]:
@@ -1718,7 +1721,8 @@ if page == "🗺️ 航线规划":
                         if st.session_state.planner.obstacles:
                             success, result = save_obstacles_to_file(st.session_state.planner.obstacles)
                             if success:
-                                st.success(f"✅ 已保存 {result} 个障碍物")
+                                st.success(f"✅ 已保存 {result} 个障碍物到文件")
+                                st.code(OBSTACLE_CONFIG_FILE, language=None)
                                 st.session_state.saved_obstacles = [{
                                     'type': o.type, 'points': o.points, 'height': o.height, 'name': o.name,
                                     'rotation': o.rotation, 'width': o.width, 'height_m': o.height_m, 
@@ -1770,8 +1774,10 @@ if page == "🗺️ 航线规划":
                     config, _ = load_obstacles_from_file()
                     if config:
                         st.info(f"📁 文件状态: 共 {len(config.get('obstacles', []))} 个障碍物 | 保存时间: {config.get('save_time', '未知')} | 版本: {config.get('version', '旧版')}")
+                        st.code(OBSTACLE_CONFIG_FILE, language=None)
                 else:
                     st.info("📁 文件状态: 暂无保存的配置")
+                    st.code(OBSTACLE_CONFIG_FILE, language=None)
                 
                 st.markdown("---")
                 col_mem_save, col_mem_load = st.columns(2)
