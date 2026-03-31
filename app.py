@@ -1683,7 +1683,7 @@ if page == "🗺️ 航线规划":
                 st.session_state.comm_logger.log_mission_upload(len(st.session_state.waypoints))
                 st.success(f"✅ 已上传{len(st.session_state.waypoints)}航点")
                 st.balloons()
-    
+
     # ========== 第二行：地图下方的功能区 ==========
     st.divider()
     
