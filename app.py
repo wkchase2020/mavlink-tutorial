@@ -12,8 +12,8 @@ from folium.plugins import Draw, AntPath
 from streamlit_folium import st_folium
 
 # ==================== 版本信息 ====================
-VERSION = "v12.2"
-VERSION_NAME = "障碍物持久化版"
+VERSION = "v12.3"
+VERSION_NAME = "紧凑布局版"
 # 配置文件保存路径
 OBSTACLE_CONFIG_FILE = r"C:\Users\77463\obstacle_config.json"
 
@@ -1179,65 +1179,58 @@ if 'auto_load_done' not in st.session_state:
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
-    st.header("🧭 导航")
-    page = st.radio("功能页面", ["🗺️ 航线规划", "✈️ 飞行监控"])
+    # 导航
+    st.markdown("**🧭 导航**")
+    page = st.radio("功能", ["🗺️ 航线规划", "✈️ 飞行监控"], label_visibility="collapsed")
     
-    st.markdown("---")
-    st.header("⚙️ 坐标系设置")
+    # 坐标系设置
+    st.markdown("**⚙️ 坐标系**")
     coord_opt = ["WGS-84", "GCJ-02(高德/百度)"]
-    sel = st.radio("输入坐标系", coord_opt, 
-                   index=0 if st.session_state.coord_system=='WGS-84' else 1)
+    sel = st.radio("坐标系", coord_opt, 
+                   index=0 if st.session_state.coord_system=='WGS-84' else 1,
+                   label_visibility="collapsed")
     st.session_state.coord_system = 'WGS-84' if 'WGS' in sel else 'GCJ-02'
     
-    st.markdown("---")
-    st.header("📊 系统状态")
-    if st.session_state.point_a:
-        st.success("✅ A点已设")
-    else:
-        st.error("❌ A点未设")
-    if st.session_state.point_b:
-        st.success("✅ B点已设")
-    else:
-        st.error("❌ B点未设")
+    # 系统状态 - 紧凑布局
+    st.markdown("**📊 系统状态**")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("A点" + ("✅" if st.session_state.point_a else "❌"))
+    with c2:
+        st.caption("B点" + ("✅" if st.session_state.point_b else "❌"))
     
-    st.metric("障碍物数量", len(st.session_state.planner.obstacles))
-    st.metric("安全半径", f"{st.session_state.planner.safety_margin}m")
+    # 关键指标 - 横向排列
+    m1, m2 = st.columns(2)
+    with m1:
+        st.metric("障碍物", len(st.session_state.planner.obstacles), label_visibility="collapsed")
+    with m2:
+        st.metric("安全半径", f"{st.session_state.planner.safety_margin}m", label_visibility="collapsed")
     
     max_obs_h = st.session_state.planner.get_max_obstacle_height()
     if max_obs_h > 0:
-        st.metric("最高障碍物", f"{max_obs_h}m")
+        st.caption(f"最高障碍: {max_obs_h}m")
         if max_obs_h >= st.session_state.flight_altitude:
-            st.error("⚠️ 强制绕行模式")
+            st.error("⚠️ 强制绕行", icon=None)
     
     if st.session_state.waypoints:
-        path_name = st.session_state.get('selected_path_name', '未命名')
-        st.metric("选中路径", path_name)
-        st.metric("航点数量", len(st.session_state.waypoints))
-        
-        # 起飞避让和终点悬停状态
+        st.caption(f"航点: {len(st.session_state.waypoints)}个")
         if st.session_state.get('has_takeoff_escape'):
-            st.warning("🚨 起飞需避让")
+            st.warning("🚨 起飞需避让", icon=None)
         if st.session_state.get('has_landing_hover'):
-            st.info("🚁 终点需悬停")
+            st.info("🚁 终点悬停", icon=None)
     
-    if st.session_state.get('available_paths'):
-        st.metric("可选路径数", len(st.session_state['available_paths']))
-    
-    # 通信链路日志 - 侧边栏实时显示
-    st.markdown("---")
-    st.header("📡 通信链路")
+    # 通信链路 - 紧凑显示
+    st.markdown("**📡 通信**")
     logs = st.session_state.comm_logger.get_logs()
     if logs:
-        # 显示最近5条日志
-        for log in list(logs)[-5:]:
-            color = {"success": "green", "error": "red", "warning": "orange", "info": "blue"}.get(log['status'], "gray")
-            st.markdown(f"<small>[{log['timestamp']}] {log['icon']} <b>{log['msg_type']}</b></small>", unsafe_allow_html=True)
-            st.markdown(f"<small style='color:{color}'>{log['content'][:30]}...</small>", unsafe_allow_html=True)
+        for log in list(logs)[-3:]:
+            status_emoji = {"success": "🟢", "error": "🔴", "warning": "🟡", "info": "🔵"}.get(log['status'], "⚪")
+            st.caption(f"{status_emoji} {log['msg_type']}: {log['content'][:20]}...")
     else:
-        st.info("暂无通信记录")
+        st.caption("暂无记录")
     
     # 版本信息
-    st.markdown("---")
+    st.divider()
     st.caption(f"📦 {VERSION} {VERSION_NAME}")
 
 
@@ -1250,28 +1243,22 @@ if page == "🗺️ 航线规划":
     if st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude):
         st.error("⚠️ **强制绕行模式激活**：存在高于或等于飞行高度的障碍物，系统将严格绕行")
     
-    with st.expander("📖 使用说明", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("""
-            ### 📋 操作步骤：
-            1. **设置A/B点**：选择坐标系，输入起点终点坐标
-            2. **添加障碍物**：在地图上绘制或在AB之间添加障碍物
-            3. **规划路径**：点击"水平绕行"，系统将严格避开所有障碍物
-            
-            ### ⚠️ 安全保证：
-            - **50米安全边距**：无人机与障碍物保持至少50米距离
-            - **严格验证**：规划后再次验证路径安全性
-            - **强制绕行**：障碍物高于飞行高度时，绝不穿行
-            """)
-        with col2:
-            st.markdown(f"""
-            ### 🔧 当前配置：
-            - **安全边距**: {st.session_state.planner.safety_margin}米
-            - **网格精度**: {st.session_state.planner.grid_size}米
-            - **飞行高度**: {st.session_state.flight_altitude}米
-            - **最高障碍**: {st.session_state.planner.get_max_obstacle_height()}米
-            """)
+    # 紧凑的使用说明 - 横向布局
+    with st.expander("📖 快速指南", expanded=False):
+        cols = st.columns(4)
+        with cols[0]:
+            st.markdown("**📋 操作步骤**")
+            st.caption("1. 设置A/B点坐标\n2. 添加障碍物\n3. 点击规划路径")
+        with cols[1]:
+            st.markdown("**⚠️ 安全保证**")
+            st.caption(f"• {st.session_state.planner.safety_margin}米安全边距\n• 强制绕行高障碍物")
+        with cols[2]:
+            st.markdown("**🔧 当前配置**")
+            st.caption(f"• 网格: {st.session_state.planner.grid_size}米\n• 飞行高度: {st.session_state.flight_altitude}米")
+        with cols[3]:
+            max_h = st.session_state.planner.get_max_obstacle_height()
+            st.markdown("**📊 状态**")
+            st.caption(f"• 障碍物: {len(st.session_state.planner.obstacles)}个\n• 最高: {max_h}米")
     
     col_map, col_ctrl = st.columns([3, 2])
     
