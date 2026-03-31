@@ -1243,25 +1243,8 @@ if page == "🗺️ 航线规划":
     if st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude):
         st.error("⚠️ **强制绕行模式激活**：存在高于或等于飞行高度的障碍物，系统将严格绕行")
     
-    # 紧凑的使用说明 - 横向布局
-    with st.expander("📖 快速指南", expanded=False):
-        cols = st.columns(4)
-        with cols[0]:
-            st.markdown("**📋 操作步骤**")
-            st.caption("1. 设置A/B点坐标\n2. 添加障碍物\n3. 点击规划路径")
-        with cols[1]:
-            st.markdown("**⚠️ 安全保证**")
-            st.caption(f"• {st.session_state.planner.safety_margin}米安全边距\n• 强制绕行高障碍物")
-        with cols[2]:
-            st.markdown("**🔧 当前配置**")
-            st.caption(f"• 网格: {st.session_state.planner.grid_size}米\n• 飞行高度: {st.session_state.flight_altitude}米")
-        with cols[3]:
-            max_h = st.session_state.planner.get_max_obstacle_height()
-            st.markdown("**📊 状态**")
-            st.caption(f"• 障碍物: {len(st.session_state.planner.obstacles)}个\n• 最高: {max_h}米")
-    
     # ========== 第一行：地图 + 紧凑控制面板 ==========
-    col_map, col_ctrl = st.columns([3, 1])
+    col_map, col_ctrl = st.columns([2.5, 1])
     
     with col_map:
         st.subheader("🗺️ 地图")
@@ -1353,7 +1336,7 @@ if page == "🗺️ 航线规划":
                     folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True,
                                        popup=f'航点{i}<br>高度:{wp.alt}m').add_to(m)
         
-        map_data = st_folium(m, width=800, height=450, key="main_map")
+        map_data = st_folium(m, width=700, height=350, key="main_map")
         
         # 处理地图绘制 - 简化逻辑
         if map_data:
@@ -1473,69 +1456,43 @@ if page == "🗺️ 航线规划":
         has_b = st.session_state.point_b is not None
         can_plan = has_a and has_b
         
-        # 调试信息显示
-        with st.expander("🔧 调试信息", expanded=True):
-            st.write("地图调试:", st.session_state.get("debug_map", {}))
-            st.write("pending_drawing:", st.session_state.pending_drawing)
-            st.write("障碍物数量:", len(st.session_state.planner.obstacles))
-            st.write("A点:", st.session_state.point_a)
-            st.write("B点:", st.session_state.point_b)
-            st.write("can_plan:", can_plan)
-        
         # ====== 优先处理地图圈选的待确认障碍物 ======
+        # 方式1: 在地图上圈选提示
+        st.caption("💡 在左侧地图圈选障碍物")
+        
         if st.session_state.pending_drawing:
             drawing = st.session_state.pending_drawing
+            st.error("🚨 确认地图圈选的障碍物")
             
-            # 使用 container 包裹，更明显
-            confirm_container = st.container()
-            with confirm_container:
-                st.error("🚨 **请确认地图圈选的障碍物** (必须设置高度并确认)")
-                
-                if drawing['type'] == 'circle':
-                    lat, lon = drawing['center']
-                    st.info(f"⭕ 圆形障碍物: 中心({lat:.6f}, {lon:.6f}) 半径{drawing['radius']:.1f}m")
-                else:
-                    st.info(f"📐 多边形: {len(drawing['points'])}个顶点")
-                
-                # 使用独立的key，避免与其他number_input冲突
-                map_obs_height = st.number_input(
-                    "🗺️ 地图障碍物高度(m)", 
-                    min_value=5, max_value=300, 
-                    value=max(st.session_state.flight_altitude + 10, 50), 
-                    key="map_obs_height_unique_v2"
-                )
-                
-                col_add, col_cancel = st.columns(2)
-                with col_add:
-                    btn_clicked = st.button("✅ 确认添加障碍物", type="primary", key="confirm_map_obs_btn_v2")
-                    if btn_clicked:
-                        if drawing['type'] == 'circle':
-                            lat, lon = drawing['center']
-                            st.session_state.planner.add_circle_obstacle(
-                                lat, lon, drawing['radius'], map_obs_height, f"圆形({map_obs_height}m)"
-                            )
-                        else:
-                            st.session_state.planner.add_polygon_obstacle(
-                                drawing['points'], map_obs_height, f"多边形({map_obs_height}m)"
-                            )
-                        st.session_state.pending_drawing = None
-                        st.session_state["last_processed_drawing"] = None
-                        st.success("✅ 障碍物已添加")
-                        st.rerun()
-                
-                with col_cancel:
-                    if st.button("❌ 取消", key="cancel_map_obs_btn_v2"):
-                        st.session_state.pending_drawing = None
-                        st.session_state["last_processed_drawing"] = None
-                        st.rerun()
+            if drawing['type'] == 'circle':
+                lat, lon = drawing['center']
+                st.caption(f"⭕ 圆形: ({lat:.5f}, {lon:.5f}) R{drawing['radius']:.0f}m")
+            else:
+                st.caption(f"📐 多边形: {len(drawing['points'])}顶点")
             
-            st.markdown("---")
-        
-        # 方式1: 在地图上圈选
-        st.info("💡 **方式1**: 在左侧地图上用 🔲矩形/⭕圆形/📐多边形 工具圈选，选中图形后右侧会显示确认按钮")
+            map_obs_height = st.number_input("高度(m)", 5, 300, 
+                max(st.session_state.flight_altitude + 10, 50), key="map_obs_height_v3")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("✅ 确认", type="primary", key="confirm_map_obs"):
+                    if drawing['type'] == 'circle':
+                        lat, lon = drawing['center']
+                        st.session_state.planner.add_circle_obstacle(
+                            lat, lon, drawing['radius'], map_obs_height, f"圆形({map_obs_height}m)")
+                    else:
+                        st.session_state.planner.add_polygon_obstacle(
+                            drawing['points'], map_obs_height, f"多边形({map_obs_height}m)")
+                    st.session_state.pending_drawing = None
+                    st.rerun()
+            with c2:
+                if st.button("❌ 取消", key="cancel_map_obs"):
+                    st.session_state.pending_drawing = None
+                    st.rerun()
+            st.divider()
         
         # 方式2: 手动输入坐标添加
-        with st.expander("➕ 方式2: 手动输入坐标添加障碍物", expanded=True):
+        with st.expander("➕ 方式2: 手动输入坐标添加", expanded=False):
             st.caption(f"输入坐标系: {st.session_state.coord_system} (将自动转换为WGS-84)")
             
             obs_type = st.selectbox("障碍物类型", ["矩形", "圆形", "多边形"], key="manual_obs_type")
@@ -1687,8 +1644,25 @@ if page == "🗺️ 航线规划":
     # ========== 第二行：地图下方的功能区 ==========
     st.divider()
     
-    # 功能标签页：障碍物管理 | 路径选择 | 航点详情
-    tab1, tab2, tab3 = st.tabs([f"🧱 障碍物({len(st.session_state.planner.obstacles)})", "📍 路径选择", "📋 航点详情"])
+    # 功能标签页：快速指南 | 障碍物管理 | 路径选择 | 航点详情
+    tab_guide, tab1, tab2, tab3 = st.tabs(["📖 指南", f"🧱 障碍物({len(st.session_state.planner.obstacles)})", "📍 路径选择", "📋 航点详情"])
+    
+    with tab_guide:
+        # 快速指南内容
+        g1, g2, g3, g4 = st.columns(4)
+        with g1:
+            st.markdown("**📋 操作步骤**")
+            st.caption("1. 设置A/B点坐标\n2. 添加障碍物\n3. 点击规划路径")
+        with g2:
+            st.markdown("**⚠️ 安全保证**")
+            st.caption(f"• {st.session_state.planner.safety_margin}米安全边距\n• 强制绕行高障碍物")
+        with g3:
+            st.markdown("**🔧 当前配置**")
+            st.caption(f"• 网格: {st.session_state.planner.grid_size}米\n• 飞行高度: {st.session_state.flight_altitude}米")
+        with g4:
+            max_h = st.session_state.planner.get_max_obstacle_height()
+            st.markdown("**📊 状态**")
+            st.caption(f"• 障碍物: {len(st.session_state.planner.obstacles)}个\n• 最高: {max_h}米")
     
     with tab1:
         # 障碍物列表和持久化
