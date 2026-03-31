@@ -14,9 +14,8 @@ from streamlit_folium import st_folium
 # ==================== 版本信息 ====================
 VERSION = "v12.2"
 VERSION_NAME = "障碍物持久化版"
-# 获取脚本所在目录，确保配置文件始终和程序保存在同一位置
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-OBSTACLE_CONFIG_FILE = os.path.join(SCRIPT_DIR, "obstacle_config.json")
+# 配置文件保存路径
+OBSTACLE_CONFIG_FILE = r"C:\Users\77463\obstacle_config.json"
 
 # ==================== 坐标系转换工具类 ====================
 class CoordinateConverter:
@@ -1768,6 +1767,23 @@ if page == "🗺️ 航线规划":
                             st.rerun()
                         else:
                             st.error(f"❌ 部署失败: {error}")
+                
+                # 下载按钮区域
+                st.markdown("---")
+                st.markdown("**⬇️ 下载配置文件到本地**")
+                if os.path.exists(OBSTACLE_CONFIG_FILE):
+                    with open(OBSTACLE_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        json_content = f.read()
+                    st.download_button(
+                        label="⬇️ 下载 obstacle_config.json",
+                        data=json_content,
+                        file_name="obstacle_config.json",
+                        mime="application/json",
+                        key="download_json"
+                    )
+                    st.caption("点击下载即可将云端保存的障碍物配置保存到你的电脑")
+                else:
+                    st.info("暂无配置文件可下载，请先保存障碍物")
                 
                 # 显示当前配置状态
                 if os.path.exists(OBSTACLE_CONFIG_FILE):
