@@ -1260,7 +1260,8 @@ if page == "🗺️ 航线规划":
             st.markdown("**📊 状态**")
             st.caption(f"• 障碍物: {len(st.session_state.planner.obstacles)}个\n• 最高: {max_h}米")
     
-    col_map, col_ctrl = st.columns([3, 2])
+    # ========== 第一行：地图 + 紧凑控制面板 ==========
+    col_map, col_ctrl = st.columns([3, 1])
     
     with col_map:
         st.subheader("🗺️ 地图")
@@ -1352,7 +1353,7 @@ if page == "🗺️ 航线规划":
                     folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True,
                                        popup=f'航点{i}<br>高度:{wp.alt}m').add_to(m)
         
-        map_data = st_folium(m, width=800, height=600, key="main_map")
+        map_data = st_folium(m, width=800, height=450, key="main_map")
         
         # 处理地图绘制 - 简化逻辑
         if map_data:
@@ -1404,104 +1405,68 @@ if page == "🗺️ 航线规划":
                     st.session_state["debug_map"]["error"] = str(e)
     
     with col_ctrl:
-        st.subheader("⚙️ 控制面板")
+        st.markdown("**⚙️ 控制面板**")
         
-        # A点设置
-        st.markdown("**📍 起点 A**")
-        st.caption(f"输入坐标系: {st.session_state.coord_system}")
-        col_a, col_def = st.columns([4, 1])
-        with col_def:
-            if st.button("⌗", key="def_a", help="默认A点: 32.2323, 118.7496"):
+        # A/B点设置 - 紧凑横向布局
+        st.caption("📍 起点 A")
+        ca1, ca2, ca3 = st.columns([3, 3, 1])
+        with ca1:
+            lat_a = st.number_input(" lat", value=32.2323 if not st.session_state.point_a else st.session_state.point_a[0], format="%.6f", key="lat_a", label_visibility="collapsed")
+        with ca2:
+            lon_a = st.number_input(" lon", value=118.7496 if not st.session_state.point_a else st.session_state.point_a[1], format="%.6f", key="lon_a", label_visibility="collapsed")
+        with ca3:
+            if st.button("⌗", key="def_a"):
                 st.session_state.point_a = (32.2323, 118.7496)
                 st.rerun()
-        c1, c2 = col_a.columns(2)
         
-        default_lat_a, default_lon_a = 32.2323, 118.7496
-        if st.session_state.point_a:
-            lat_wgs, lon_wgs = st.session_state.point_a
-            if st.session_state.coord_system == 'GCJ-02':
-                lat_gcj, lon_gcj = CoordinateConverter.wgs84_to_gcj02(lat_wgs, lon_wgs)
-                default_lat_a, default_lon_a = lat_gcj, lon_gcj
-            else:
-                default_lat_a, default_lon_a = lat_wgs, lon_wgs
-        
-        lat_a = c1.number_input("纬度", value=default_lat_a, format="%.6f", key="lat_a")
-        lon_a = c2.number_input("经度", value=default_lon_a, format="%.6f", key="lon_a")
-        
-        if st.button("✅ 设置A点", key="set_a"):
+        if st.button("✅ 设A点", key="set_a", use_container_width=True):
             lat_wgs, lon_wgs = CoordinateConverter.from_user_input(lat_a, lon_a, st.session_state.coord_system)
             st.session_state.point_a = (lat_wgs, lon_wgs)
-            st.success(f"A点已设置 (WGS84: {lat_wgs:.6f}, {lon_wgs:.6f})")
             st.rerun()
         
-        # B点设置
-        st.markdown("**📍 终点 B**")
-        col_b, col_def2 = st.columns([4, 1])
-        with col_def2:
-            if st.button("⌗", key="def_b", help="默认B点: 32.2344, 118.7493"):
+        st.caption("📍 终点 B")
+        cb1, cb2, cb3 = st.columns([3, 3, 1])
+        with cb1:
+            lat_b = st.number_input(" lat", value=32.2344 if not st.session_state.point_b else st.session_state.point_b[0], format="%.6f", key="lat_b", label_visibility="collapsed")
+        with cb2:
+            lon_b = st.number_input(" lon", value=118.7493 if not st.session_state.point_b else st.session_state.point_b[1], format="%.6f", key="lon_b", label_visibility="collapsed")
+        with cb3:
+            if st.button("⌗", key="def_b"):
                 st.session_state.point_b = (32.2344, 118.7493)
                 st.rerun()
-        c3, c4 = col_b.columns(2)
         
-        default_lat_b, default_lon_b = 32.2344, 118.7493
-        if st.session_state.point_b:
-            lat_wgs, lon_wgs = st.session_state.point_b
-            if st.session_state.coord_system == 'GCJ-02':
-                lat_gcj, lon_gcj = CoordinateConverter.wgs84_to_gcj02(lat_wgs, lon_wgs)
-                default_lat_b, default_lon_b = lat_gcj, lon_gcj
-            else:
-                default_lat_b, default_lon_b = lat_wgs, lon_wgs
-        
-        lat_b = c3.number_input("纬度", value=default_lat_b, format="%.6f", key="lat_b")
-        lon_b = c4.number_input("经度", value=default_lon_b, format="%.6f", key="lon_b")
-        
-        if st.button("✅ 设置B点", key="set_b"):
+        if st.button("✅ 设B点", key="set_b", use_container_width=True):
             lat_wgs, lon_wgs = CoordinateConverter.from_user_input(lat_b, lon_b, st.session_state.coord_system)
             st.session_state.point_b = (lat_wgs, lon_wgs)
-            st.success(f"B点已设置 (WGS84: {lat_wgs:.6f}, {lon_wgs:.6f})")
             st.rerun()
         
-        st.markdown("---")
+        st.divider()
         
-        # 飞行参数
-        st.markdown("**✈️ 飞行参数**")
-        new_alt = st.slider("设定飞行高度(m)", 10, 200, st.session_state.flight_altitude, key="flight_alt")
+        # 飞行参数 - 紧凑布局
+        st.caption("✈️ 飞行参数")
+        c1, c2 = st.columns(2)
+        with c1:
+            new_alt = st.number_input("高度(m)", 10, 200, st.session_state.flight_altitude, key="flight_alt")
+        with c2:
+            new_safety = st.number_input("安全半径(m)", 5, 20, st.session_state.planner.safety_margin, key="safety_margin")
+        
         if new_alt != st.session_state.flight_altitude:
             st.session_state.flight_altitude = new_alt
-            st.rerun()
-        
-        max_alt = st.slider("最大允许高度(m)", st.session_state.flight_altitude + 10, 300, 
-                           st.session_state.max_altitude, key="max_alt")
-        if max_alt != st.session_state.max_altitude:
-            st.session_state.max_altitude = max_alt
-        
-        # 安全半径设置
-        st.markdown("---")
-        st.markdown("**🛡️ 安全设置**")
-        new_safety = st.slider("无人机安全半径(m)", 5, 20, st.session_state.planner.safety_margin, key="safety_margin")
         if new_safety != st.session_state.planner.safety_margin:
             st.session_state.planner.safety_margin = new_safety
-            st.success(f"✅ 安全半径已设置为 {new_safety} 米")
-            st.rerun()
         
-        # 高度对比
+        # 高度警告 - 紧凑显示
         max_obs_h = st.session_state.planner.get_max_obstacle_height()
         if max_obs_h > 0:
-            st.markdown("---")
-            st.markdown("**📊 高度分析**")
-            col_h1, col_h2 = st.columns(2)
-            col_h1.metric("飞行高度", f"{st.session_state.flight_altitude}m")
-            col_h2.metric("最高障碍", f"{max_obs_h}m")
-            
             if max_obs_h >= st.session_state.flight_altitude:
-                st.error("🔴 障碍物高于飞行高度！必须绕行")
+                st.error(f"⚠️ 障碍物({max_obs_h}m)高于飞行高度！", icon=None)
             elif max_obs_h >= st.session_state.flight_altitude - 20:
-                st.warning("🟠 障碍物接近飞行高度")
+                st.warning(f"障碍物({max_obs_h}m)接近飞行高度", icon=None)
         
-        st.markdown("---")
+        st.divider()
         
-        # 障碍物管理
-        st.markdown("**🧱 障碍物管理**")
+        # 障碍物管理 - 简化标题
+        st.caption("🧱 障碍物管理")
         
         # 计算 can_plan (必须在调试信息之前定义)
         has_a = st.session_state.point_a is not None
@@ -1673,316 +1638,155 @@ if page == "🗺️ 航线规划":
                     except Exception as e:
                         st.error(f"❌ 输入格式错误: {e}")
         
-        # 障碍物列表
-        if st.session_state.planner.obstacles:
-            with st.expander(f"📋 障碍物列表({len(st.session_state.planner.obstacles)}个)", expanded=True):
-                for i, obs in enumerate(st.session_state.planner.obstacles):
-                    icon = "⭕" if obs.type == "circle" else "⬜" if obs.type == "rectangle" else "📐"
-                    is_blocking = "🔴" if obs.height >= st.session_state.flight_altitude else "🟢"
-                    
-                    col_obs, col_del = st.columns([4, 1])
-                    with col_obs:
-                        st.write(f"{is_blocking} {icon} #{i+1}: {obs.name} - {obs.height}m")
-                    with col_del:
-                        if st.button("🗑️", key=f"del_obs_{i}", help=f"删除障碍物 #{i+1}"):
-                            # 删除指定索引的障碍物
-                            st.session_state.planner.obstacles.pop(i)
-                            # 清除已规划的路径
-                            st.session_state.planned_path_horizontal = None
-                            st.session_state.planned_path_climb = None
-                            st.session_state.waypoints = []
-                            st.success(f"✅ 已删除障碍物 #{i+1}")
-                            st.rerun()
-                
-                st.markdown("---")
-                
-                # ====== 一键部署区域 ======
-                st.markdown("**🚀 障碍物配置持久化**")
-                st.caption(f"配置文件: `{OBSTACLE_CONFIG_FILE}` | 版本: {VERSION} {VERSION_NAME}")
-                st.markdown(f"<span style='font-size: 0.8em; color: #888;'>💡 文件保存在程序同目录下，绝对路径如上所示</span>", unsafe_allow_html=True)
-                
-                deploy_cols = st.columns([2, 2, 2, 2])
-                with deploy_cols[0]:
-                    if st.button("💾 保存到文件", type="primary", key="save_to_file"):
-                        if st.session_state.planner.obstacles:
-                            success, result = save_obstacles_to_file(st.session_state.planner.obstacles)
-                            if success:
-                                st.success(f"✅ 已保存 {result} 个障碍物到文件")
-                                st.code(OBSTACLE_CONFIG_FILE, language=None)
-                                st.session_state.saved_obstacles = [{
-                                    'type': o.type, 'points': o.points, 'height': o.height, 'name': o.name,
-                                    'rotation': o.rotation, 'width': o.width, 'height_m': o.height_m, 
-                                    'radius': getattr(o, 'radius', 30)
-                                } for o in st.session_state.planner.obstacles]
-                            else:
-                                st.error(f"❌ 保存失败: {result}")
-                        else:
-                            st.warning("⚠️ 当前没有障碍物可保存")
-                
-                with deploy_cols[1]:
-                    if st.button("📂 从文件加载", key="load_from_file"):
-                        config, error = load_obstacles_from_file()
-                        if config:
-                            count = apply_obstacles_config(st.session_state.planner, config)
-                            st.session_state.saved_obstacles = config.get('obstacles', [])
-                            st.session_state.planned_path_horizontal = None
-                            st.session_state.planned_path_climb = None
-                            st.session_state.waypoints = []
-                            st.success(f"✅ 已加载 {count} 个障碍物 (保存于 {config.get('save_time', '未知时间')})")
-                            st.rerun()
-                        else:
-                            st.error(f"❌ 加载失败: {error}")
-                
-                with deploy_cols[2]:
-                    if st.button("🗑️ 清除全部", key="clear_all_obs"):
-                        st.session_state.planner.clear_obstacles()
-                        st.session_state.planned_path_horizontal = None
-                        st.session_state.planned_path_climb = None
-                        st.session_state.waypoints = []
-                        st.rerun()
-                
-                with deploy_cols[3]:
-                    if st.button("🚀 一键部署", type="primary", key="one_click_deploy"):
-                        config, error = load_obstacles_from_file()
-                        if config:
-                            count = apply_obstacles_config(st.session_state.planner, config)
-                            st.session_state.saved_obstacles = config.get('obstacles', [])
-                            st.session_state.planned_path_horizontal = None
-                            st.session_state.planned_path_climb = None
-                            st.session_state.waypoints = []
-                            st.success(f"🚀 一键部署完成！已部署 {count} 个障碍物")
-                            st.rerun()
-                        else:
-                            st.error(f"❌ 部署失败: {error}")
-                
-                # 下载按钮区域
-                st.markdown("---")
-                st.markdown("**⬇️ 下载配置文件到本地**")
-                if os.path.exists(OBSTACLE_CONFIG_FILE):
-                    with open(OBSTACLE_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                        json_content = f.read()
-                    st.download_button(
-                        label="⬇️ 下载 obstacle_config.json",
-                        data=json_content,
-                        file_name="obstacle_config.json",
-                        mime="application/json",
-                        key="download_json"
-                    )
-                    st.caption("点击下载即可将云端保存的障碍物配置保存到你的电脑")
-                else:
-                    st.info("暂无配置文件可下载，请先保存障碍物")
-                
-                # 显示当前配置状态
-                if os.path.exists(OBSTACLE_CONFIG_FILE):
-                    config, _ = load_obstacles_from_file()
-                    if config:
-                        st.info(f"📁 文件状态: 共 {len(config.get('obstacles', []))} 个障碍物 | 保存时间: {config.get('save_time', '未知')} | 版本: {config.get('version', '旧版')}")
-                        st.code(OBSTACLE_CONFIG_FILE, language=None)
-                else:
-                    st.info("📁 文件状态: 暂无保存的配置")
-                    st.code(OBSTACLE_CONFIG_FILE, language=None)
-                
-                st.markdown("---")
-                col_mem_save, col_mem_load = st.columns(2)
-                with col_mem_save:
-                    if st.button("💾 记忆到会话", key="save_obstacles"):
-                        st.session_state.saved_obstacles = [{
-                            'type': o.type, 'points': o.points, 'height': o.height, 'name': o.name,
-                            'rotation': o.rotation, 'width': o.width, 'height_m': o.height_m, 
-                            'radius': getattr(o, 'radius', 30)
-                        } for o in st.session_state.planner.obstacles]
-                        st.success(f"✅ 已记忆 {len(st.session_state.saved_obstacles)} 个障碍物到会话")
-                with col_mem_load:
-                    if st.session_state.get('saved_obstacles') and st.button("🔄 从会话恢复", key="load_obstacles"):
-                        st.session_state.planner.clear_obstacles()
-                        for o in st.session_state.saved_obstacles:
-                            if o['type'] == 'circle':
-                                st.session_state.planner.add_circle_obstacle(
-                                    o['points'][0][0], o['points'][0][1], o['radius'], o['height'], o['name'])
-                            elif o['type'] == 'rectangle':
-                                st.session_state.planner.add_rotated_rectangle_obstacle(
-                                    o['points'][0][0], o['points'][0][1], o['width'], o['height_m'], 
-                                    o['rotation'], o['height'], o['name'])
-                            else:
-                                st.session_state.planner.add_polygon_obstacle(o['points'], o['height'], o['name'])
-                        st.success(f"✅ 已从会话恢复 {len(st.session_state.saved_obstacles)} 个障碍物")
-                        st.rerun()
+        st.divider()
         
-        st.markdown("---")
+        # 路径规划 - 紧凑布局
+        st.caption("🧭 路径规划")
         
-        # 路径规划 (can_plan 已在上方定义)
-        # 显示当前规划状态
-        plan_status = []
-        plan_status.append("✅ A点已设" if has_a else "❌ A点未设")
-        plan_status.append("✅ B点已设" if has_b else "❌ B点未设")
-        plan_status.append(f"障碍物: {len(st.session_state.planner.obstacles)}个")
+        # 状态提示
+        if st.session_state.point_a and st.session_state.planner.is_collision(
+            st.session_state.point_a[0], st.session_state.point_a[1], st.session_state.flight_altitude):
+            st.warning("🚨 起点在障碍物内", icon=None)
+        if st.session_state.point_b and st.session_state.planner.is_collision(
+            st.session_state.point_b[0], st.session_state.point_b[1], st.session_state.flight_altitude):
+            st.info("🚁 终点在障碍物内", icon=None)
         
-        st.markdown(f"**🧭 路径规划** ({' | '.join(plan_status)})")
-        
-        # 【新增】检查起点是否在障碍物内
-        if st.session_state.point_a:
-            start_collision = st.session_state.planner.is_collision(
-                st.session_state.point_a[0], st.session_state.point_a[1], 
-                st.session_state.flight_altitude
-            )
-            if start_collision:
-                st.warning("⚠️ **起点在障碍物安全半径内！** 系统将自动规划「起飞避让」路径：先飞行至安全区域，再前往目标点。")
-        
-        # 检查终点是否在障碍物内
-        if st.session_state.point_b:
-            end_collision = st.session_state.planner.is_collision(
-                st.session_state.point_b[0], st.session_state.point_b[1],
-                st.session_state.flight_altitude
-            )
-            if end_collision:
-                st.info("ℹ️ **终点在障碍物安全半径内！** 系统将自动规划「终点悬停」路径：飞行至目标最近安全点悬停，并提示操作员。")
-        
-        # 检查是否可以爬升飞越
-        force_avoidance = st.session_state.planner.should_force_avoidance(st.session_state.flight_altitude)
-        can_climb = not force_avoidance
-        
-        # 规划所有路径按钮
-        if st.button("🧮 规划所有路径", disabled=not can_plan, type="primary", use_container_width=True):
+        # 规划按钮
+        if st.button("🧮 规划路径", disabled=not can_plan, type="primary", use_container_width=True):
             if st.session_state.point_a and st.session_state.point_b:
                 start_wp = Waypoint(st.session_state.point_a[0], st.session_state.point_a[1], 
                                    st.session_state.flight_altitude, 22)
                 end_wp = Waypoint(st.session_state.point_b[0], st.session_state.point_b[1], 
                                  st.session_state.flight_altitude, 16)
                 
-                # 记录导航目标到OBC
                 st.session_state.comm_logger.log_nav_target_to_obc(
-                    st.session_state.point_a, st.session_state.point_b, 
-                    st.session_state.flight_altitude
-                )
-                st.session_state.comm_logger.log_path_planning_start(
-                    "A*", len(st.session_state.planner.obstacles)
-                )
+                    st.session_state.point_a, st.session_state.point_b, st.session_state.flight_altitude)
+                st.session_state.comm_logger.log_path_planning_start("A*", len(st.session_state.planner.obstacles))
                 
-                # 记录MAVLink发送日志
-                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: NAV_TARGET ({st.session_state.point_a[0]:.6f}, {st.session_state.point_a[1]:.6f}) → ({st.session_state.point_b[0]:.6f}, {st.session_state.point_b[1]:.6f})")
-                
-                with st.spinner("🧭 正在规划多条路径..."):
-                    all_paths = st.session_state.planner.plan_multiple_paths(
-                        start_wp, end_wp, st.session_state.max_altitude
-                    )
+                with st.spinner("规划中..."):
+                    all_paths = st.session_state.planner.plan_multiple_paths(start_wp, end_wp, st.session_state.max_altitude)
                     st.session_state['available_paths'] = all_paths
                     
                     if all_paths:
-                        st.success(f"✅ 规划完成！共 {len(all_paths)} 条可选路径")
-                        # 记录每条路径的规划完成日志
+                        st.success(f"✅ {len(all_paths)}条路径")
                         for k, v in all_paths.items():
-                            st.session_state.comm_logger.log_path_planning_complete(
-                                v['distance'], len(v['path']), v['type']
-                            )
+                            st.session_state.comm_logger.log_path_planning_complete(v['distance'], len(v['path']), v['type'])
                     else:
-                        st.error("❌ 无法找到可行路径")
+                        st.error("❌ 无可用路径")
                 st.rerun()
         
-        # 显示可选路径列表
+        # 显示当前选中路径
+        if st.session_state.waypoints:
+            st.caption(f"✅ {st.session_state.get('selected_path_name', '路径')}: {len(st.session_state.waypoints)}航点")
+            if st.button("📤 上传飞控", type="primary", use_container_width=True):
+                st.session_state.mission_sent = True
+                st.session_state.comm_logger.log_mission_upload(len(st.session_state.waypoints))
+                st.success(f"✅ 已上传{len(st.session_state.waypoints)}航点")
+                st.balloons()
+    
+    # ========== 第二行：地图下方的功能区 ==========
+    st.divider()
+    
+    # 功能标签页：障碍物管理 | 路径选择 | 航点详情
+    tab1, tab2, tab3 = st.tabs([f"🧱 障碍物({len(st.session_state.planner.obstacles)})", "📍 路径选择", "📋 航点详情"])
+    
+    with tab1:
+        # 障碍物列表和持久化
+        if st.session_state.planner.obstacles:
+            cols = st.columns([1, 1, 1, 1])
+            with cols[0]:
+                if st.button("💾 保存", key="save_to_file"):
+                    success, result = save_obstacles_to_file(st.session_state.planner.obstacles)
+                    st.success(f"✅ 已保存{result}个") if success else st.error(f"❌ {result}")
+            with cols[1]:
+                if st.button("📂 加载", key="load_from_file"):
+                    config, error = load_obstacles_from_file()
+                    if config:
+                        count = apply_obstacles_config(st.session_state.planner, config)
+                        st.success(f"✅ 加载{count}个")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {error}")
+            with cols[2]:
+                if st.button("🗑️ 清除", key="clear_all_obs"):
+                    st.session_state.planner.clear_obstacles()
+                    st.rerun()
+            with cols[3]:
+                if st.button("🚀 部署", key="one_click_deploy"):
+                    config, error = load_obstacles_from_file()
+                    if config:
+                        count = apply_obstacles_config(st.session_state.planner, config)
+                        st.success(f"🚀 部署{count}个")
+                        st.rerun()
+            
+            # 下载配置
+            if os.path.exists(OBSTACLE_CONFIG_FILE):
+                with open(OBSTACLE_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    st.download_button("⬇️ 下载配置", f.read(), "obstacle_config.json", 
+                                     mime="application/json", key="download_json")
+            
+            # 障碍物列表
+            st.caption("障碍物列表")
+            obs_cols = st.columns(4)
+            for i, obs in enumerate(st.session_state.planner.obstacles):
+                with obs_cols[i % 4]:
+                    icon = "⭕" if obs.type == "circle" else "⬜" if obs.type == "rectangle" else "📐"
+                    color = "🔴" if obs.height >= st.session_state.flight_altitude else "🟢"
+                    st.caption(f"{color} {icon} #{i+1}: {obs.height}m")
+                    if st.button("🗑️", key=f"del_obs_{i}"):
+                        st.session_state.planner.obstacles.pop(i)
+                        st.rerun()
+        else:
+            st.info("暂无障碍物")
+    
+    with tab2:
+        # 可选路径列表
         if st.session_state.get('available_paths'):
-            st.markdown("---")
-            st.markdown("**📍 可选路径**")
-            
             paths = st.session_state['available_paths']
-            
-            # 按距离排序
             sorted_paths = sorted(paths.items(), key=lambda x: x[1]['distance'])
             
             for path_key, path_info in sorted_paths:
-                col_path, col_btn = st.columns([3, 1])
-                
+                col_path, col_btn = st.columns([4, 1])
                 with col_path:
-                    # 检查是否包含起飞避让或终点悬停
                     first_wp = path_info['path'][0]
                     last_wp = path_info['path'][-1]
-                    
-                    # 起点避让：第一个航点远离起点
                     is_escape = len(path_info['path']) > 2 and (
                         abs(first_wp.lat - st.session_state.point_a[0]) > 0.00001 or
-                        abs(first_wp.lon - st.session_state.point_a[1]) > 0.00001
-                    )
-                    
-                    # 终点悬停：最后一个航点远离终点
+                        abs(first_wp.lon - st.session_state.point_a[1]) > 0.00001)
                     is_hover = len(path_info['path']) > 2 and (
                         abs(last_wp.lat - st.session_state.point_b[0]) > 0.00001 or
-                        abs(last_wp.lon - st.session_state.point_b[1]) > 0.00001
-                    )
+                        abs(last_wp.lon - st.session_state.point_b[1]) > 0.00001)
                     
-                    badge = ""
-                    if is_escape and is_hover:
-                        badge = "🚨【起飞避让+终点悬停】"
-                    elif is_escape:
-                        badge = "🚨【起飞避让】"
-                    elif is_hover:
-                        badge = "🚁【终点悬停】"
+                    badge = "🚨" if is_escape else ""
+                    badge += "🚁" if is_hover else ""
                     
                     if path_info['type'] == 'climb':
-                        st.write(f"{badge}{path_info['name']}: {path_info['distance']:.0f}m, 最高{path_info['max_altitude']:.0f}m")
+                        st.write(f"{badge} {path_info['name']}: {path_info['distance']:.0f}m, 最高{path_info['max_altitude']:.0f}m")
                     else:
-                        st.write(f"{badge}{path_info['name']}: {path_info['distance']:.0f}m, {len(path_info['path'])}个航点")
-                    
-                    # 显示提示
-                    if is_escape and is_hover:
-                        st.warning("⚠️ 起点需避让起飞，终点需附近悬停")
-                    elif is_escape:
-                        st.warning("⚠️ 起点在障碍物安全半径内，路径包含先避让起飞阶段")
-                    elif is_hover:
-                        st.info("ℹ️ 终点在障碍物安全半径内，将在最近安全点悬停")
+                        st.write(f"{badge} {path_info['name']}: {path_info['distance']:.0f}m, {len(path_info['path'])}航点")
                 
                 with col_btn:
-                    if is_escape and is_hover:
-                        btn_label = "选择(避让+悬停)"
-                    elif is_escape:
-                        btn_label = "选择(含避让)"
-                    elif is_hover:
-                        btn_label = "选择(含悬停)"
-                    else:
-                        btn_label = "选择"
-                    
-                    if st.button(btn_label, key=f"select_{path_key}"):
+                    if st.button("选择", key=f"select_{path_key}"):
                         st.session_state.waypoints = path_info['path']
                         st.session_state.selected_path_type = path_info['type']
                         st.session_state.selected_path_name = path_info['name']
                         st.session_state.has_takeoff_escape = is_escape
                         st.session_state.has_landing_hover = is_hover
-                        
-                        note = ""
-                        if is_escape and is_hover:
-                            note = "（含起飞避让和终点悬停）"
-                        elif is_escape:
-                            note = "（含起飞避让）"
-                        elif is_hover:
-                            note = "（含终点悬停）"
-                        
-                        st.success(f"✅ 已选择: {path_info['name']}{note}")
                         st.rerun()
-        
-        # 显示当前选中的路径
+        else:
+            st.info("请先规划路径")
+    
+    with tab3:
+        # 航点详情
         if st.session_state.waypoints:
-            st.markdown("---")
-            st.markdown("**✅ 当前选中路径**")
-            path_name = st.session_state.get('selected_path_name', '未命名路径')
-            st.success(f"{path_name}: {len(st.session_state.waypoints)}个航点")
-            
-            # 显示详细航点信息
-            with st.expander("📋 航点详情"):
-                for i, wp in enumerate(st.session_state.waypoints):
-                    st.write(f"航点{i}: ({wp.lat:.6f}, {wp.lon:.6f}), 高度{wp.alt}m")
-            
-            if st.button("📤 上传到飞控", type="primary"):
-                st.session_state.mission_sent = True
-                st.session_state.comm_logger.log_mission_upload(len(st.session_state.waypoints))
-                
-                # 记录MAVLink发送日志
-                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_UPLOAD count={len(st.session_state.waypoints)}")
-                for i, wp in enumerate(st.session_state.waypoints):
-                    st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: WAYPOINT #{i} lat={wp.lat:.6f} lon={wp.lon:.6f} alt={wp.alt}")
-                st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_ACK ok")
-                
-                st.success(f"✅ 已上传 {len(st.session_state.waypoints)} 个航点到飞控")
-                st.balloons()
+            path_name = st.session_state.get('selected_path_name', '未命名')
+            st.caption(f"当前路径: {path_name}")
+            wp_data = []
+            for i, wp in enumerate(st.session_state.waypoints):
+                wp_data.append({"序号": i, "纬度": f"{wp.lat:.6f}", "经度": f"{wp.lon:.6f}", "高度": f"{wp.alt}m"})
+            st.dataframe(wp_data, use_container_width=True, hide_index=True)
+        else:
+            st.info("未选择路径")
 
 
 # ==================== 飞行监控页面 ====================
