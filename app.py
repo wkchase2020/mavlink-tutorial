@@ -1244,7 +1244,7 @@ if page == "🗺️ 航线规划":
         st.error("⚠️ **强制绕行模式激活**：存在高于或等于飞行高度的障碍物，系统将严格绕行")
     
     # ========== 第一行：地图 + 紧凑控制面板 ==========
-    col_map, col_ctrl = st.columns([2.5, 1])
+    col_map, col_ctrl = st.columns([3, 1.2])
     
     with col_map:
         st.subheader("🗺️ 地图")
@@ -1336,7 +1336,7 @@ if page == "🗺️ 航线规划":
                     folium.CircleMarker([wp.lat, wp.lon], radius=5, color=color, fill=True,
                                        popup=f'航点{i}<br>高度:{wp.alt}m').add_to(m)
         
-        map_data = st_folium(m, width=700, height=350, key="main_map")
+        map_data = st_folium(m, width=None, height=750, key="main_map")
         
         # 处理地图绘制 - 简化逻辑
         if map_data:
@@ -1641,126 +1641,96 @@ if page == "🗺️ 航线规划":
                 st.success(f"✅ 已上传{len(st.session_state.waypoints)}航点")
                 st.balloons()
 
-    # ========== 第二行：地图下方的功能区 ==========
-    st.divider()
-    
-    # 功能标签页：快速指南 | 障碍物管理 | 路径选择 | 航点详情
-    tab_guide, tab1, tab2, tab3 = st.tabs(["📖 指南", f"🧱 障碍物({len(st.session_state.planner.obstacles)})", "📍 路径选择", "📋 航点详情"])
-    
-    with tab_guide:
-        # 快速指南内容
-        g1, g2, g3, g4 = st.columns(4)
-        with g1:
-            st.markdown("**📋 操作步骤**")
-            st.caption("1. 设置A/B点坐标\n2. 添加障碍物\n3. 点击规划路径")
-        with g2:
-            st.markdown("**⚠️ 安全保证**")
-            st.caption(f"• {st.session_state.planner.safety_margin}米安全边距\n• 强制绕行高障碍物")
-        with g3:
-            st.markdown("**🔧 当前配置**")
-            st.caption(f"• 网格: {st.session_state.planner.grid_size}米\n• 飞行高度: {st.session_state.flight_altitude}米")
-        with g4:
-            max_h = st.session_state.planner.get_max_obstacle_height()
-            st.markdown("**📊 状态**")
-            st.caption(f"• 障碍物: {len(st.session_state.planner.obstacles)}个\n• 最高: {max_h}米")
-    
-    with tab1:
-        # 障碍物列表和持久化
-        if st.session_state.planner.obstacles:
-            cols = st.columns([1, 1, 1, 1])
-            with cols[0]:
-                if st.button("💾 保存", key="save_to_file"):
-                    success, result = save_obstacles_to_file(st.session_state.planner.obstacles)
-                    st.success(f"✅ 已保存{result}个") if success else st.error(f"❌ {result}")
-            with cols[1]:
-                if st.button("📂 加载", key="load_from_file"):
-                    config, error = load_obstacles_from_file()
-                    if config:
-                        count = apply_obstacles_config(st.session_state.planner, config)
-                        st.success(f"✅ 加载{count}个")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ {error}")
-            with cols[2]:
-                if st.button("🗑️ 清除", key="clear_all_obs"):
-                    st.session_state.planner.clear_obstacles()
+    # ========== 第二行：障碍物管理（横向紧凑布局）==========
+    if st.session_state.planner.obstacles:
+        st.markdown("**🧱 障碍物管理**")
+        
+        # 第一行：操作按钮
+        btn_cols = st.columns([1, 1, 1, 1, 2])
+        with btn_cols[0]:
+            if st.button("💾 保存", key="save_to_file"):
+                success, result = save_obstacles_to_file(st.session_state.planner.obstacles)
+                st.success(f"✅ 已保存{result}个") if success else st.error(f"❌ {result}")
+        with btn_cols[1]:
+            if st.button("📂 加载", key="load_from_file"):
+                config, error = load_obstacles_from_file()
+                if config:
+                    count = apply_obstacles_config(st.session_state.planner, config)
+                    st.success(f"✅ 加载{count}个")
                     st.rerun()
-            with cols[3]:
-                if st.button("🚀 部署", key="one_click_deploy"):
-                    config, error = load_obstacles_from_file()
-                    if config:
-                        count = apply_obstacles_config(st.session_state.planner, config)
-                        st.success(f"🚀 部署{count}个")
-                        st.rerun()
-            
-            # 下载配置
+                else:
+                    st.error(f"❌ {error}")
+        with btn_cols[2]:
+            if st.button("🗑️ 清除", key="clear_all_obs"):
+                st.session_state.planner.clear_obstacles()
+                st.rerun()
+        with btn_cols[3]:
+            if st.button("🚀 部署", key="one_click_deploy"):
+                config, error = load_obstacles_from_file()
+                if config:
+                    count = apply_obstacles_config(st.session_state.planner, config)
+                    st.success(f"🚀 部署{count}个")
+                    st.rerun()
+        with btn_cols[4]:
             if os.path.exists(OBSTACLE_CONFIG_FILE):
                 with open(OBSTACLE_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    st.download_button("⬇️ 下载配置", f.read(), "obstacle_config.json", 
+                    st.download_button("⬇️ 下载", f.read(), "obstacle_config.json", 
                                      mime="application/json", key="download_json")
-            
-            # 障碍物列表
-            st.caption("障碍物列表")
-            obs_cols = st.columns(4)
-            for i, obs in enumerate(st.session_state.planner.obstacles):
-                with obs_cols[i % 4]:
-                    icon = "⭕" if obs.type == "circle" else "⬜" if obs.type == "rectangle" else "📐"
-                    color = "🔴" if obs.height >= st.session_state.flight_altitude else "🟢"
-                    st.caption(f"{color} {icon} #{i+1}: {obs.height}m")
-                    if st.button("🗑️", key=f"del_obs_{i}"):
-                        st.session_state.planner.obstacles.pop(i)
-                        st.rerun()
-        else:
-            st.info("暂无障碍物")
+        
+        # 第二行：障碍物列表（紧凑横向排列）
+        obs_cols = st.columns(min(len(st.session_state.planner.obstacles), 8))
+        for i, obs in enumerate(st.session_state.planner.obstacles):
+            with obs_cols[i % len(obs_cols)]:
+                icon = "⭕" if obs.type == "circle" else "⬜" if obs.type == "rectangle" else "📐"
+                color = "🔴" if obs.height >= st.session_state.flight_altitude else "🟢"
+                st.caption(f"{color} {icon} #{i+1}:{obs.height}m")
+                if st.button("🗑️", key=f"del_obs_{i}"):
+                    st.session_state.planner.obstacles.pop(i)
+                    st.rerun()
     
-    with tab2:
-        # 可选路径列表
-        if st.session_state.get('available_paths'):
-            paths = st.session_state['available_paths']
-            sorted_paths = sorted(paths.items(), key=lambda x: x[1]['distance'])
-            
-            for path_key, path_info in sorted_paths:
-                col_path, col_btn = st.columns([4, 1])
-                with col_path:
-                    first_wp = path_info['path'][0]
-                    last_wp = path_info['path'][-1]
-                    is_escape = len(path_info['path']) > 2 and (
-                        abs(first_wp.lat - st.session_state.point_a[0]) > 0.00001 or
-                        abs(first_wp.lon - st.session_state.point_a[1]) > 0.00001)
-                    is_hover = len(path_info['path']) > 2 and (
-                        abs(last_wp.lat - st.session_state.point_b[0]) > 0.00001 or
-                        abs(last_wp.lon - st.session_state.point_b[1]) > 0.00001)
-                    
-                    badge = "🚨" if is_escape else ""
-                    badge += "🚁" if is_hover else ""
-                    
-                    if path_info['type'] == 'climb':
-                        st.write(f"{badge} {path_info['name']}: {path_info['distance']:.0f}m, 最高{path_info['max_altitude']:.0f}m")
-                    else:
-                        st.write(f"{badge} {path_info['name']}: {path_info['distance']:.0f}m, {len(path_info['path'])}航点")
+    # ========== 第三行：路径选择（直接显示，非标签页）==========
+    if st.session_state.get('available_paths'):
+        st.markdown("**📍 可选路径**")
+        paths = st.session_state['available_paths']
+        sorted_paths = sorted(paths.items(), key=lambda x: x[1]['distance'])
+        
+        for path_key, path_info in sorted_paths:
+            col_path, col_btn = st.columns([4, 1])
+            with col_path:
+                first_wp = path_info['path'][0]
+                last_wp = path_info['path'][-1]
+                is_escape = len(path_info['path']) > 2 and (
+                    abs(first_wp.lat - st.session_state.point_a[0]) > 0.00001 or
+                    abs(first_wp.lon - st.session_state.point_a[1]) > 0.00001)
+                is_hover = len(path_info['path']) > 2 and (
+                    abs(last_wp.lat - st.session_state.point_b[0]) > 0.00001 or
+                    abs(last_wp.lon - st.session_state.point_b[1]) > 0.00001)
                 
-                with col_btn:
-                    if st.button("选择", key=f"select_{path_key}"):
-                        st.session_state.waypoints = path_info['path']
-                        st.session_state.selected_path_type = path_info['type']
-                        st.session_state.selected_path_name = path_info['name']
-                        st.session_state.has_takeoff_escape = is_escape
-                        st.session_state.has_landing_hover = is_hover
-                        st.rerun()
-        else:
-            st.info("请先规划路径")
+                badge = "🚨" if is_escape else ""
+                badge += "🚁" if is_hover else ""
+                
+                if path_info['type'] == 'climb':
+                    st.write(f"{badge} {path_info['name']}: {path_info['distance']:.0f}m, 最高{path_info['max_altitude']:.0f}m")
+                else:
+                    st.write(f"{badge} {path_info['name']}: {path_info['distance']:.0f}m, {len(path_info['path'])}航点")
+            
+            with col_btn:
+                if st.button("选择", key=f"select_{path_key}"):
+                    st.session_state.waypoints = path_info['path']
+                    st.session_state.selected_path_type = path_info['type']
+                    st.session_state.selected_path_name = path_info['name']
+                    st.session_state.has_takeoff_escape = is_escape
+                    st.session_state.has_landing_hover = is_hover
+                    st.rerun()
     
-    with tab3:
-        # 航点详情
-        if st.session_state.waypoints:
-            path_name = st.session_state.get('selected_path_name', '未命名')
-            st.caption(f"当前路径: {path_name}")
-            wp_data = []
-            for i, wp in enumerate(st.session_state.waypoints):
-                wp_data.append({"序号": i, "纬度": f"{wp.lat:.6f}", "经度": f"{wp.lon:.6f}", "高度": f"{wp.alt}m"})
-            st.dataframe(wp_data, use_container_width=True, hide_index=True)
-        else:
-            st.info("未选择路径")
+    # ========== 第四行：航点详情（表格）==========
+    if st.session_state.waypoints:
+        st.markdown("**📋 航点详情**")
+        path_name = st.session_state.get('selected_path_name', '未命名')
+        wp_data = []
+        for i, wp in enumerate(st.session_state.waypoints):
+            wp_data.append({"序号": i, "纬度": f"{wp.lat:.6f}", "经度": f"{wp.lon:.6f}", "高度": f"{wp.alt}m"})
+        st.dataframe(wp_data, use_container_width=True, hide_index=True, height=150)
 
 
 # ==================== 飞行监控页面 ====================
@@ -2109,7 +2079,7 @@ elif page == "✈️ 飞行监控":
                 ).add_to(m)
             
             # 渲染地图
-            st_folium(m, width=750, height=500, key="flight_monitor_map_v2")
+            st_folium(m, width=None, height=600, key="flight_monitor_map_v2")
         
         with right_col:
             # ==========================================
