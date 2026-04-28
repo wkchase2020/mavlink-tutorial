@@ -1650,7 +1650,10 @@ if page == "🗺️ 航线规划":
         with btn_cols[0]:
             if st.button("💾 保存", key="save_to_file"):
                 success, result = save_obstacles_to_file(st.session_state.planner.obstacles)
-                st.success(f"✅ 已保存{result}个") if success else st.error(f"❌ {result}")
+                if success:
+                    st.success(f"✅ 已保存{result}个")
+                else:
+                    st.error(f"❌ {result}")
         with btn_cols[1]:
             if st.button("📂 加载", key="load_from_file"):
                 config, error = load_obstacles_from_file()
