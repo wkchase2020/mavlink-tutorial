@@ -12,8 +12,8 @@ from folium.plugins import Draw, AntPath
 from streamlit_folium import st_folium
 
 # ==================== 版本信息 ====================
-VERSION = "v12.3"
-VERSION_NAME = "紧凑布局版"
+VERSION = "v12.4"
+VERSION_NAME = "安全半径全局应用版"
 # 配置文件保存路径
 OBSTACLE_CONFIG_FILE = r"C:\Users\77463\obstacle_config.json"
 
@@ -293,27 +293,25 @@ class Obstacle:
                     return True
         return False
     
-    def line_intersects(self, p1, p2):
-        """检查线段是否与障碍物相交"""
-        if self.type == "circle":
-            # 检查线段上多个采样点
-            num_samples = 30
-            for i in range(num_samples + 1):
-                t = i / num_samples
-                lat = p1[0] + (p2[0] - p1[0]) * t
-                lon = p1[1] + (p2[1] - p1[1]) * t
-                if self.is_inside(lat, lon):
-                    return True
-            return False
-        
-        # 首先检查线段的两个端点是否在多边形内
-        if point_in_polygon(p1[0], p1[1], self.points):
+    def line_intersects(self, p1, p2, safety_margin=0):
+        """检查线段是否与障碍物相交（含安全半径）"""
+        # 快速检查：端点是否在扩展后的障碍物内
+        if self.is_inside(p1[0], p1[1], safety_margin):
             return True
-        if point_in_polygon(p2[0], p2[1], self.points):
+        if self.is_inside(p2[0], p2[1], safety_margin):
             return True
         
-        # 然后检查线段是否与多边形的边相交
-        return line_intersects_polygon(p1, p2, self.points)
+        # 计算线段长度，决定采样密度（每3米一个采样点，至少20个）
+        dist_m = math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2) * 111000
+        num_samples = max(20, int(dist_m / 3))
+        
+        for i in range(1, num_samples):
+            t = i / num_samples
+            lat = p1[0] + (p2[0] - p1[0]) * t
+            lon = p1[1] + (p2[1] - p1[1]) * t
+            if self.is_inside(lat, lon, safety_margin):
+                return True
+        return False
 
 
 class GridPathPlanner:
@@ -373,10 +371,10 @@ class GridPathPlanner:
         return False
     
     def line_hits_obstacle(self, p1, p2, flight_alt):
-        """【严格】检测线段是否与任何障碍物相交"""
+        """【严格】检测线段是否与任何障碍物相交（含安全半径）"""
         for obs in self.obstacles:
             if obs.height >= flight_alt:
-                if obs.line_intersects(p1, p2):
+                if obs.line_intersects(p1, p2, self.safety_margin):
                     return True
                 # 额外检查中点和采样点
                 mid_lat = (p1[0] + p2[0]) / 2
@@ -384,7 +382,7 @@ class GridPathPlanner:
                 if obs.is_inside(mid_lat, mid_lon, self.safety_margin):
                     return True
             elif flight_alt < obs.height + 15:
-                if obs.line_intersects(p1, p2):
+                if obs.line_intersects(p1, p2, self.safety_margin):
                     return True
         return False
     
@@ -399,7 +397,7 @@ class GridPathPlanner:
         return (lat, lon)
     
     def get_bounding_box_with_obstacles(self, start, end):
-        """获取包含所有障碍物的扩展边界框"""
+        """获取包含所有障碍物及安全半径的扩展边界框"""
         if not self.obstacles:
             return (min(start[0], end[0]), max(start[0], end[0]), 
                    min(start[1], end[1]), max(start[1], end[1]))
@@ -409,15 +407,19 @@ class GridPathPlanner:
         
         for obs in self.obstacles:
             if obs.type == "circle":
-                # 圆形边界
-                r_deg = obs.radius / 111000
+                # 圆形边界（含安全半径）
+                r_deg = (obs.radius + self.safety_margin) / 111000
                 all_lats.extend([obs.center_lat - r_deg, obs.center_lat + r_deg])
                 all_lons.extend([obs.center_lon - r_deg, obs.center_lon + r_deg])
             else:
-                # 多边形边界
+                # 多边形边界（含安全半径）
+                margin_deg = self.safety_margin / 111000
                 for p in obs.points:
                     all_lats.append(p[0])
                     all_lons.append(p[1])
+                # 额外扩展安全半径对应的度数
+                all_lats.extend([obs.center_lat - margin_deg, obs.center_lat + margin_deg])
+                all_lons.extend([obs.center_lon - margin_deg, obs.center_lon + margin_deg])
         
         lat_min, lat_max = min(all_lats), max(all_lats)
         lon_min, lon_max = min(all_lons), max(all_lons)
@@ -457,9 +459,9 @@ class GridPathPlanner:
         
         for dlat, dlon in directions:
             # 沿该方向逐步搜索，直到找到安全点
-            for step in range(1, 50):  # 最多搜索50步
-                test_lat = start[0] + dlat * step * 0.0001  # 约11米/步
-                test_lon = start[1] + dlon * step * 0.0001 / math.cos(math.radians(start[0]))
+            for step in range(1, 100):  # 最多搜索100步，约500米范围
+                test_lat = start[0] + dlat * step * 0.000045  # 约5米/步
+                test_lon = start[1] + dlon * step * 0.000045 / math.cos(math.radians(start[0]))
                 
                 if not self.is_collision(test_lat, test_lon, flight_alt):
                     # 找到出口，计算距离
@@ -504,9 +506,9 @@ class GridPathPlanner:
         
         for dlat, dlon in directions:
             # 沿该方向逐步搜索，直到找到安全点
-            for step in range(1, 50):  # 最多搜索50步
-                test_lat = end[0] + dlat * step * 0.0001  # 约11米/步
-                test_lon = end[1] + dlon * step * 0.0001 / math.cos(math.radians(end[0]))
+            for step in range(1, 100):  # 最多搜索100步，约500米范围
+                test_lat = end[0] + dlat * step * 0.000045  # 约5米/步
+                test_lon = end[1] + dlon * step * 0.000045 / math.cos(math.radians(end[0]))
                 
                 if not self.is_collision(test_lat, test_lon, flight_alt):
                     # 找到入口，计算到终点的距离
@@ -995,6 +997,14 @@ class GridPathPlanner:
             p1 = (waypoints[i].lat, waypoints[i].lon)
             p2 = (waypoints[i+1].lat, waypoints[i+1].lon)
             
+            # 【v12.4】第一段允许从障碍物内起飞（起飞避让场景）
+            if i == 0 and self.is_collision(p1[0], p1[1], flight_alt):
+                # 只检查终点是否安全，线段信任起飞避让逻辑
+                if self.is_collision(p2[0], p2[1], flight_alt):
+                    st.error(f"❌ 路径验证失败：起飞避让点仍在障碍物内")
+                    return False
+                continue
+            
             # 检查起点和终点
             if self.is_collision(p1[0], p1[1], flight_alt):
                 st.error(f"❌ 路径验证失败：航点{i}在障碍物内")
@@ -1003,7 +1013,7 @@ class GridPathPlanner:
                 st.error(f"❌ 路径验证失败：航点{i+1}在障碍物内")
                 return False
             
-            # 检查线段
+            # 检查线段（含安全半径）
             if self.line_hits_obstacle(p1, p2, flight_alt):
                 st.error(f"❌ 路径验证失败：航段{i}-{i+1}穿过障碍物")
                 return False
@@ -1029,8 +1039,10 @@ class GridPathPlanner:
             lon = start[1] + (end[1] - start[1]) * t
             
             for obs in self.obstacles:
-                if obs.is_inside(lat, lon, 0):
-                    max_obs_height = max(max_obs_height, obs.height)
+                # 【v12.4修复】爬升飞越采样检查也要保持安全半径
+                if start_wp.alt < obs.height + 15:
+                    if obs.is_inside(lat, lon, self.safety_margin):
+                        max_obs_height = max(max_obs_height, obs.height)
         
         if max_obs_height == 0:
             return [start_wp, end_wp]
