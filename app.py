@@ -1165,6 +1165,8 @@ def init_session_state():
         'all_flight_positions': [],
         'drone_pos_index': 0,
         'flight_start_time': None,
+        'flight_elapsed': 0,
+        'flight_complete_time': None,
         # 障碍物记忆
         'saved_obstacles': [],
         # 起飞避让和终点悬停标记
@@ -1764,36 +1766,53 @@ elif page == "✈️ 飞行监控":
         
         with ctrl_cols[0]:
             if not st.session_state.mission_executing:
-                if st.button("▶️ 开始任务", type="primary", use_container_width=True, key="start_btn"):
-                    st.session_state.mission_executing = True
-                    st.session_state.current_waypoint_index = 0
-                    st.session_state.flight_start_time = time.time()
-                    st.session_state.logged_waypoints = set([0])  # 起点算已完成
-                    
-                    # 【关键】清除之前的路径时间缓存，重新计算
-                    if 'waypoint_cumulative_times' in st.session_state:
-                        del st.session_state['waypoint_cumulative_times']
-                    if 'total_flight_distance' in st.session_state:
-                        del st.session_state['total_flight_distance']
-                    
-                    # 简化的位置计算 - 直接记录当前目标航点
-                    st.session_state.drone_pos_index = 0
-                    st.session_state.drone_position = [
-                        st.session_state.waypoints[0].lat,
-                        st.session_state.waypoints[0].lon
-                    ]
-                    
-                    st.session_state.comm_logger.log_flight_start()
-                    timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                    st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_START")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: ACK | Mode: AUTO")
-                    # 不rerun，让下面的显示逻辑处理
+                # 判断是重新开始还是继续
+                can_resume = (
+                    st.session_state.flight_start_time is not None
+                    and st.session_state.current_waypoint_index > 0
+                    and st.session_state.current_waypoint_index < total_wp - 1
+                )
+                btn_label = "▶️ 继续任务" if can_resume else "▶️ 开始任务"
+                
+                if st.button(btn_label, type="primary", use_container_width=True, key="start_btn"):
+                    if can_resume:
+                        # 继续任务：恢复执行，重置 flight_start_time 以补偿暂停时间
+                        st.session_state.mission_executing = True
+                        st.session_state.flight_start_time = time.time()
+                    else:
+                        # 全新开始
+                        st.session_state.mission_executing = True
+                        st.session_state.current_waypoint_index = 0
+                        st.session_state.flight_start_time = time.time()
+                        st.session_state.flight_elapsed = 0
+                        st.session_state.flight_complete_time = None
+                        st.session_state.logged_waypoints = set([0])
+                        
+                        if 'waypoint_cumulative_times' in st.session_state:
+                            del st.session_state['waypoint_cumulative_times']
+                        if 'total_flight_distance' in st.session_state:
+                            del st.session_state['total_flight_distance']
+                        
+                        st.session_state.drone_pos_index = 0
+                        st.session_state.drone_position = [
+                            st.session_state.waypoints[0].lat,
+                            st.session_state.waypoints[0].lon
+                        ]
+                        
+                        st.session_state.comm_logger.log_flight_start()
+                        timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                        st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: MISSION_START")
+                        st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: ACK | Mode: AUTO")
             else:
                 st.button("⏳ 执行中...", disabled=True, use_container_width=True)
         
         with ctrl_cols[1]:
             if st.button("⏸️ 暂停", use_container_width=True, key="pause_btn"):
                 st.session_state.mission_executing = False
+                # 累加已飞行时间到 flight_elapsed
+                if st.session_state.flight_start_time:
+                    st.session_state.flight_elapsed = st.session_state.get('flight_elapsed', 0) + (time.time() - st.session_state.flight_start_time)
+                    st.session_state.flight_start_time = None
                 timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
                 st.session_state.send_log.append(f"[{timestamp}] GCS→OBC: PAUSE_MISSION")
         
@@ -1802,6 +1821,9 @@ elif page == "✈️ 飞行监控":
                 st.session_state.mission_executing = False
                 st.session_state.current_waypoint_index = 0
                 st.session_state.logged_waypoints = set()
+                st.session_state.flight_elapsed = 0
+                st.session_state.flight_start_time = None
+                st.session_state.flight_complete_time = None
         
         with ctrl_cols[3]:
             if st.button("🔄 重置", use_container_width=True, key="reset_btn"):
@@ -1810,9 +1832,9 @@ elif page == "✈️ 飞行监控":
                 st.session_state.drone_position = None
                 st.session_state.flight_start_time = None
                 st.session_state.flight_complete_time = None
+                st.session_state.flight_elapsed = 0
                 st.session_state.logged_waypoints = set()
                 
-                # 【关键】清除路径时间缓存
                 if 'waypoint_cumulative_times' in st.session_state:
                     del st.session_state['waypoint_cumulative_times']
                 if 'total_flight_distance' in st.session_state:
@@ -1842,80 +1864,104 @@ elif page == "✈️ 飞行监控":
             st.session_state.waypoint_cumulative_times = seg_times
             st.session_state.total_flight_distance = total_dist
         
-        if st.session_state.mission_executing and st.session_state.flight_start_time:
-            elapsed = time.time() - st.session_state.flight_start_time
-            
-            # 基于累计时间计算当前航点
-            target_wp_idx = 0
-            for i, cum_time in enumerate(st.session_state.waypoint_cumulative_times):
-                if elapsed >= cum_time:
-                    target_wp_idx = i
-                else:
-                    break
-            target_wp_idx = min(target_wp_idx, total_wp - 1)
-            
-            # 航点有变化
-            if target_wp_idx > curr_idx:
-                # 记录所有经过的航点
-                for wp_idx in range(curr_idx + 1, target_wp_idx + 1):
-                    if wp_idx not in st.session_state.logged_waypoints:
-                        st.session_state.logged_waypoints.add(wp_idx)
-                        timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                        st.session_state.comm_logger.log_waypoint_reached(wp_idx, total_wp)
-                        st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: WP_REACHED #{wp_idx}")
-                
-                st.session_state.current_waypoint_index = target_wp_idx
-                curr_idx = target_wp_idx
-                
-                # 到达终点
-                if curr_idx >= total_wp - 1:
-                    st.session_state.mission_executing = False
-                    # 【修复】记录任务完成时间，用于停止计时
-                    st.session_state.flight_complete_time = time.time()
-                    st.session_state.comm_logger.log_flight_complete()
+        # 计算总飞行时间（含暂停补偿）
+        total_elapsed = 0
+        if st.session_state.flight_complete_time:
+            total_elapsed = st.session_state.flight_complete_time
+        elif st.session_state.flight_start_time or st.session_state.get('flight_elapsed'):
+            total_elapsed = st.session_state.get('flight_elapsed', 0)
+            if st.session_state.flight_start_time:
+                total_elapsed += time.time() - st.session_state.flight_start_time
+        
+        # 计算连续航段位置和进度（与地图显示同步）
+        curr_seg_idx = st.session_state.current_waypoint_index
+        seg_progress = 0.0
+        
+        if total_wp > 1 and 'waypoint_cumulative_times' in st.session_state:
+            cum_times = st.session_state.waypoint_cumulative_times
+            if total_elapsed >= cum_times[-1]:
+                curr_seg_idx = total_wp - 1
+                seg_progress = 0.0
+            else:
+                for i in range(len(cum_times) - 1):
+                    if cum_times[i] <= total_elapsed < cum_times[i + 1]:
+                        curr_seg_idx = i
+                        seg_duration = cum_times[i + 1] - cum_times[i]
+                        seg_progress = (total_elapsed - cum_times[i]) / seg_duration if seg_duration > 0 else 0.0
+                        break
+        
+        # 航点推进日志（离散事件）
+        if st.session_state.mission_executing and curr_seg_idx > st.session_state.current_waypoint_index:
+            for wp_idx in range(st.session_state.current_waypoint_index + 1, curr_seg_idx + 1):
+                if wp_idx not in st.session_state.logged_waypoints:
+                    st.session_state.logged_waypoints.add(wp_idx)
                     timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
-                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: MISSION_COMPLETE")
+                    st.session_state.comm_logger.log_waypoint_reached(wp_idx, total_wp)
+                    st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: WP_REACHED #{wp_idx}")
+            st.session_state.current_waypoint_index = curr_seg_idx
+            
+            # 到达终点
+            if curr_seg_idx >= total_wp - 1:
+                st.session_state.mission_executing = False
+                st.session_state.flight_complete_time = total_elapsed
+                st.session_state.comm_logger.log_flight_complete()
+                timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+                st.session_state.recv_log.append(f"[{timestamp}] FCU→OBC→GCS: MISSION_COMPLETE")
+        
+        # 同步 curr_idx 到当前航段
+        curr_idx = curr_seg_idx
         
         # ==========================================
         # 实时状态显示
         # ==========================================
         st.markdown("---")
         
-        # 【修复】飞行时间计算 - 任务完成后停止计时
-        flight_time = 0
-        if st.session_state.flight_start_time:
-            if hasattr(st.session_state, 'flight_complete_time') and st.session_state.flight_complete_time:
-                # 任务已完成，使用完成时的时间
-                flight_time = int(st.session_state.flight_complete_time - st.session_state.flight_start_time)
-            else:
-                # 任务进行中
-                flight_time = int(time.time() - st.session_state.flight_start_time)
+        # 飞行时间（基于 total_elapsed，暂停时自动停止增长）
+        flight_time = int(total_elapsed)
         
         flight_speed = 8.5
         if st.session_state.mission_executing:
             flight_speed = 8.5 + (0.3 if int(time.time()) % 4 < 2 else -0.2)
         
-        # 计算剩余距离
-        remaining_dist = 0
-        for i in range(curr_idx, total_wp - 1):
-            remaining_dist += st.session_state.planner.haversine_distance(
-                st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon,
-                st.session_state.waypoints[i+1].lat, st.session_state.waypoints[i+1].lon
-            )
+        # 计算连续进度、剩余距离和ETA（与地图位置严格同步）
+        total_dist = st.session_state.get('total_flight_distance', 0)
+        flown_dist = 0.0
+        remaining_dist = 0.0
         
-        eta_str = "00:00" if curr_idx >= total_wp - 1 else f"{int(remaining_dist/8.5//60):02d}:{int(remaining_dist/8.5%60):02d}"
-        progress_pct = min(100, int((curr_idx / max(1, total_wp-1)) * 100))
+        if total_wp > 1 and total_dist > 0:
+            # 计算每段距离
+            seg_dists = []
+            for i in range(total_wp - 1):
+                d = st.session_state.planner.haversine_distance(
+                    st.session_state.waypoints[i].lat, st.session_state.waypoints[i].lon,
+                    st.session_state.waypoints[i+1].lat, st.session_state.waypoints[i+1].lon
+                )
+                seg_dists.append(d)
+            
+            # 已飞距离 = 前面完整航段 + 当前航段已飞部分
+            for i in range(curr_seg_idx):
+                flown_dist += seg_dists[i]
+            if curr_seg_idx < len(seg_dists):
+                flown_dist += seg_dists[curr_seg_idx] * seg_progress
+            
+            remaining_dist = total_dist - flown_dist
+            progress_pct = min(100.0, (flown_dist / total_dist) * 100)
+        else:
+            progress_pct = 100.0 if curr_seg_idx >= total_wp - 1 else 0.0
+        
+        eta_seconds = remaining_dist / 8.5 if remaining_dist > 0 else 0
+        eta_str = "00:00" if curr_seg_idx >= total_wp - 1 else f"{int(eta_seconds//60):02d}:{int(eta_seconds%60):02d}"
         
         # 状态卡片
         status_cols = st.columns(6)
-        status_cols[0].metric("📍 当前航点", f"{min(curr_idx+1, total_wp)}/{total_wp}")
+        status_cols[0].metric("📍 当前航点", f"{min(curr_seg_idx+1, total_wp)}/{total_wp}")
         status_cols[1].metric("⚡ 飞行速度", f"{flight_speed:.1f} m/s")
         status_cols[2].metric("⏱️ 已用时间", f"{flight_time//60:02d}:{flight_time%60:02d}")
         status_cols[3].metric("📏 剩余距离", f"{remaining_dist:.0f} m")
         status_cols[4].metric("🏁 预计到达", eta_str)
         status_cols[5].metric("🔋 电量模拟", f"{max(0, 100 - flight_time//10)}%")
         
-        st.progress(progress_pct / 100, text=f"任务进度: {progress_pct}%")
+        st.progress(progress_pct / 100, text=f"任务进度: {progress_pct:.1f}%")
         st.markdown("---")
         
         # ==========================================
@@ -1926,32 +1972,17 @@ elif page == "✈️ 飞行监控":
         with main_col:
             st.subheader("🗺️ 实时飞行地图")
             
-            # 【修复】基于当前航点索引计算无人机位置，确保与航点推进逻辑一致
-            if st.session_state.mission_executing and st.session_state.flight_start_time and curr_idx < total_wp - 1:
-                # 飞行中：在当前航段内插值
-                elapsed = time.time() - st.session_state.flight_start_time
-                
-                # 计算当前航段进度
-                if curr_idx < len(st.session_state.waypoint_cumulative_times) - 1:
-                    seg_start_time = st.session_state.waypoint_cumulative_times[curr_idx]
-                    seg_end_time = st.session_state.waypoint_cumulative_times[curr_idx + 1]
-                    seg_duration = seg_end_time - seg_start_time
-                    seg_elapsed = elapsed - seg_start_time
-                    seg_progress = max(0, min(1, seg_elapsed / seg_duration)) if seg_duration > 0 else 0
-                else:
-                    seg_progress = 0
-                
-                # 插值计算当前位置
-                curr_wp = st.session_state.waypoints[curr_idx]
-                next_wp = st.session_state.waypoints[curr_idx + 1]
+            # 基于连续航段进度计算无人机位置，与状态栏完全同步
+            if st.session_state.waypoints and curr_seg_idx < total_wp - 1:
+                # 飞行中或暂停中：使用 seg_progress 插值
+                curr_wp = st.session_state.waypoints[curr_seg_idx]
+                next_wp = st.session_state.waypoints[curr_seg_idx + 1]
                 drone_lat = curr_wp.lat + (next_wp.lat - curr_wp.lat) * seg_progress
                 drone_lon = curr_wp.lon + (next_wp.lon - curr_wp.lon) * seg_progress
                 drone_pos = [drone_lat, drone_lon]
-                
-                # 保存位置
                 st.session_state.drone_position = drone_pos
-            elif curr_idx >= total_wp - 1 and st.session_state.waypoints:
-                # 到达终点或任务完成
+            elif st.session_state.waypoints and curr_seg_idx >= total_wp - 1:
+                # 到达终点
                 drone_pos = [st.session_state.waypoints[-1].lat, st.session_state.waypoints[-1].lon]
                 st.session_state.drone_position = drone_pos
             elif st.session_state.drone_position:
